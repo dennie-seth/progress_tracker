@@ -32,6 +32,22 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO", description="Python logging level name")
 
+    # ---- Milestone 2.5: custom Bot API endpoint + SOCKS5 ----
+    bot_api_url: str = Field(
+        default="",
+        description=(
+            "Base URL of a custom Telegram Bot API server "
+            "(e.g. http://host:8081). Empty = use cloud api.telegram.org."
+        ),
+    )
+    socks_proxy_url: str | None = Field(
+        default=None,
+        description=(
+            "SOCKS5 proxy for Telegram Bot API traffic, classic format "
+            "'socks5://user:pass@host:port'. None = direct connection."
+        ),
+    )
+
 
 def load_settings() -> Settings:
     """Instantiate Settings. Separated so tests can monkeypatch easily."""

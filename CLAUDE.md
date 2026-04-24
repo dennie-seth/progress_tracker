@@ -87,6 +87,15 @@ duration, date range, and whether to overlay the upload date on each clip.
   (normalize → optional `setpts`/`atempo` speedup → optional `drawtext`
   overlay → `concat`) so everything runs in a single ffmpeg process. Don't
   reintroduce MoviePy.
+- **Bot API endpoint + SOCKS5 routing** (milestone 2.5 onward). `build_bot()`
+  inspects `BOT_API_URL` (custom `telegram-bot-api` server, empty = cloud) and
+  `SOCKS_PROXY_URL` (`socks5://user:pass@host:port`, None = direct) and swaps
+  in `SocksAiohttpSession` (extends aiogram's `AiohttpSession`, replaces the
+  default `TCPConnector` with `aiohttp_socks.ProxyConnector.from_url`) when a
+  proxy is set. aiohttp does not support SOCKS5 natively — keep the custom
+  session. When switching a bot from cloud api.telegram.org to a custom server,
+  the operator must run `curl "https://api.telegram.org/bot<TOKEN>/logOut"`
+  once before the first connection.
 - **Clip trimming rule**: if `clip.duration <= target/N`, keep at full speed;
   otherwise speed up via `setpts=PTS/speed` + `atempo` (chain `atempo` filters
   when speed > 2.0). Never truncate — the user chose "speed up" over "crop".
