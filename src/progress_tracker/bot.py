@@ -7,10 +7,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import PRODUCTION, TelegramAPIServer
 from aiogram.fsm.storage.memory import MemoryStorage
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from progress_tracker.bot_api.session import SocksAiohttpSession
 from progress_tracker.config import Settings
 from progress_tracker.handlers import build_root_router
+from progress_tracker.middlewares.db import DependenciesMiddleware
+from progress_tracker.storage.base import Storage
 
 
 def build_bot(settings: Settings) -> Bot:
@@ -44,12 +47,25 @@ def build_bot(settings: Settings) -> Bot:
     )
 
 
-def build_dispatcher() -> Dispatcher:
+def build_dispatcher(
+    *,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    storage: Storage | None = None,
+) -> Dispatcher:
     """Create the Dispatcher wired with all feature routers.
 
     MemoryStorage is fine for a single-instance bot. Switch to Redis-backed
     storage when running multiple replicas.
+
+    When `session_factory` and `storage` are both supplied, a
+    `DependenciesMiddleware` is attached so handlers can request `session`
+    and `storage` as kwargs. They're optional so unit tests can build a
+    minimal dispatcher without a database.
     """
     dp = Dispatcher(storage=MemoryStorage())
+    if session_factory is not None and storage is not None:
+        dp.update.outer_middleware(
+            DependenciesMiddleware(session_factory=session_factory, storage=storage)
+        )
     dp.include_router(build_root_router())
     return dp

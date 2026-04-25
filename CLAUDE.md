@@ -4,14 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Early-alpha. **Milestone 1 (skeleton) is the only milestone implemented.** The
-full design and roadmap live in the plan file at
-`C:\Users\denni\.claude\plans\enumerated-twirling-glacier.md` — read it before
-starting non-trivial work, it lists the target data model, ffmpeg strategy, and
-build order (milestones 2–9 are not yet code).
+Early-alpha. Milestones 1, 2, 2.5 and 3 are implemented. Roadmap at
+`C:\Users\denni\.claude\plans\enumerated-twirling-glacier.md`; current
+substep plan at `C:\Users\denni\.claude\plans\milestone-2.5-bot-api-server.md`
+(milestone 2.5 is shipped, kept for reference).
 
-What exists right now: aiogram bot that answers `/start` and `/help`. No DB
-usage, no video handling, no FSM flows yet — those are milestones 2–6.
+What works right now:
+- `/start` and `/help` reply with a welcome message.
+- Postgres with the full schema (users / tags / videos / video_tags /
+  compilations) — Alembic runs `upgrade head` on every bot startup.
+- Optional routing through a remote `telegram-bot-api` server via SOCKS5
+  (controlled by `BOT_API_URL` + `SOCKS_PROXY_URL`).
+- Video upload pipeline: user sends a video with hashtags in the caption,
+  bot downloads it (through the SOCKS tunnel if configured), saves to
+  `LocalStorage`, persists `User`/`Tag`/`Video`/`VideoTag` rows, and replies
+  with a saved-confirmation that includes how many prior clips share the
+  same tags.
+
+Not yet built: compile FSM (milestone 5), ffmpeg compiler (milestone 6),
+history/library commands (milestone 4 partials), tests/CI workflow file
+(milestone 8). ffprobe isn't wired — for now we trust Telegram's `Video`
+duration/width/height fields. Add a probe step in milestone 4 if we need
+fps or accurate duration.
 
 ## Commands
 
@@ -111,18 +125,33 @@ duration, date range, and whether to overlay the upload date on each clip.
   keep service-layer functions queue-agnostic so it can be added without
   rewriting call sites.
 
-### Code shape (once milestones land)
+### Code shape
 
-The eventual layout is described in the plan file. Near-term additions slot in
-as follows:
-- `src/progress_tracker/db/` — SQLAlchemy 2.0 async models, session factory,
-  repositories (`VideoRepo`, `TagRepo`, `CompilationRepo`).
-- `src/progress_tracker/handlers/video_upload.py` + `compile_flow.py` — the
-  upload entry point and the multi-step compile FSM.
-- `src/progress_tracker/video/` — `probe.py` (ffprobe), `compile.py` (filter
-  graph builder — the most complex file), `overlay.py` (drawtext helpers).
-- `src/progress_tracker/services/` — orchestration that the handlers call;
-  keep handlers thin.
+In place today:
+- `src/progress_tracker/db/` — `models.py`, async `session.py`, `repos.py`
+  (`UserRepo`, `TagRepo`, `VideoRepo`).
+- `src/progress_tracker/storage/` — `Storage` Protocol in `base.py`,
+  `LocalStorage` in `local.py`. ffmpeg needs real filesystem paths, so
+  the Protocol exposes `write_path() -> Path` for writes and `open()` as
+  an async context manager yielding a Path for reads. A future S3 backend
+  uses tempdirs to satisfy that contract.
+- `src/progress_tracker/services/ingest.py` — orchestrates the upload
+  flow (parse hashtags → upsert user/tags → bot.download → write file →
+  insert Video + VideoTag → count prior clips). Returns `IngestResult`
+  or `None` (no hashtags = caller replies with hint).
+- `src/progress_tracker/middlewares/db.py` — `DependenciesMiddleware`
+  opens an `AsyncSession` per update, exposes it and `Storage` to handlers
+  via `data["session"]` / `data["storage"]`, commits on success / rolls
+  back on exception.
+- `src/progress_tracker/handlers/` — `start.py` and `video_upload.py`,
+  each as a `make_router()` factory. `__init__.py::build_root_router`
+  composes them.
+- `src/progress_tracker/bot_api/session.py` — `SocksAiohttpSession` for
+  the SOCKS5 transport (milestone 2.5).
+
+Coming next:
+- `src/progress_tracker/handlers/compile_flow.py` — multi-step FSM.
+- `src/progress_tracker/video/` — `probe.py`, `compile.py`, `overlay.py`.
 
 All new routers must be registered in `handlers/__init__.py::build_root_router`
 — do not register routers directly on the Dispatcher in `bot.py`.

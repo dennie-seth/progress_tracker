@@ -2,7 +2,7 @@
 
 from aiogram import Router
 
-from progress_tracker.handlers import start
+from progress_tracker.handlers import start, video_upload
 
 __all__ = ["build_root_router"]
 
@@ -10,10 +10,11 @@ __all__ = ["build_root_router"]
 def build_root_router() -> Router:
     """Aggregate every feature router into a single root router.
 
-    Later milestones append their routers here (video upload, compile FSM, ...).
+    Later milestones append their routers here (compile FSM, history, ...).
     Each call returns a fresh Router tree so the factory can be invoked
     repeatedly (e.g. from tests).
     """
     root = Router(name="root")
     root.include_router(start.make_router())
+    root.include_router(video_upload.make_router())
     return root

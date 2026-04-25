@@ -8,7 +8,9 @@ import structlog
 
 from progress_tracker.bot import build_bot, build_dispatcher
 from progress_tracker.config import load_settings
+from progress_tracker.db.session import create_engine, create_session_factory
 from progress_tracker.logging_setup import configure_logging
+from progress_tracker.storage.local import LocalStorage
 
 
 async def _run() -> None:
@@ -18,13 +20,19 @@ async def _run() -> None:
     log = structlog.get_logger("progress_tracker")
     log.info("starting bot", media_dir=str(settings.media_dir))
 
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    storage = LocalStorage(root=settings.media_dir)
+    settings.media_dir.mkdir(parents=True, exist_ok=True)
+
     bot = build_bot(settings)
-    dp = build_dispatcher()
+    dp = build_dispatcher(session_factory=session_factory, storage=storage)
 
     try:
         await dp.start_polling(bot, handle_signals=True)
     finally:
         await bot.session.close()
+        await engine.dispose()
 
 
 def main() -> None:

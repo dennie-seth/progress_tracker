@@ -15,11 +15,24 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-_PROJECT_ENV_VARS = ("BOT_TOKEN", "DATABASE_URL", "MEDIA_DIR", "LOG_LEVEL")
+from progress_tracker.db.session import create_engine, create_session_factory
+
+_PROJECT_ENV_VARS = (
+    "BOT_TOKEN",
+    "DATABASE_URL",
+    "MEDIA_DIR",
+    "LOG_LEVEL",
+    "BOT_API_URL",
+    "SOCKS_PROXY_URL",
+)
 _ORIGINAL_DATABASE_URL = os.environ.get("DATABASE_URL")
+_TABLES_IN_TRUNCATE_ORDER = "users, tags, videos, video_tags, compilations"
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +49,30 @@ def postgres_url() -> str:
     if not _ORIGINAL_DATABASE_URL:
         pytest.skip("DATABASE_URL not set — run tests inside docker compose")
     return _ORIGINAL_DATABASE_URL
+
+
+@pytest.fixture
+async def db_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
+    """Async engine bound to the compose `db` service. Disposed after each test."""
+    engine = create_engine(postgres_url)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+    """Truncate every domain table, then yield a fresh AsyncSession.
+
+    Tests can `await session.commit()` freely — the next test will start with
+    empty tables again.
+    """
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(f"TRUNCATE {_TABLES_IN_TRUNCATE_ORDER} RESTART IDENTITY CASCADE")
+        )
+    factory: async_sessionmaker[AsyncSession] = create_session_factory(db_engine)
+    async with factory() as session:
+        yield session
 
 
 @pytest.fixture
