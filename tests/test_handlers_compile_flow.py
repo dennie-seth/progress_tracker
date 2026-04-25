@@ -237,23 +237,22 @@ async def test_overlay_selected_advances_to_confirming_with_summary() -> None:
 async def test_confirm_cancel_clears_state(db_session: AsyncSession) -> None:
     cb = _callback("confirm:cancel")
     state = _state()
-    await on_confirm(cb, state=state, session=db_session)
+    await on_confirm(
+        cb,
+        state=state,
+        session=db_session,
+        storage=MagicMock(),
+        session_factory=MagicMock(),
+    )
     state.clear.assert_awaited()
 
 
-async def test_confirm_go_runs_stub_and_clears_state(
+async def test_confirm_go_with_no_candidates_replies_and_clears(
     db_session: AsyncSession,
 ) -> None:
-    """Until milestone 6 the confirm just summarizes the candidate count and
-    tells the user the engine isn't wired yet."""
+    """No matching clips -> short-circuit to error reply, no background task."""
     await UserRepo(db_session).upsert(user_id=100, username="u", first_name="U")
     [tag] = await TagRepo(db_session).upsert_many(user_id=100, names=["squat"])
-    repo = VideoRepo(db_session)
-    for _ in range(2):
-        await repo.create(
-            id=uuid.uuid4(), user_id=100, telegram_file_id="x",
-            storage_key="x", duration_sec=Decimal("1"), tag_ids=[tag.id],
-        )
     await db_session.commit()
 
     cb = _callback("confirm:go", user_id=100)
@@ -267,12 +266,77 @@ async def test_confirm_go_runs_stub_and_clears_state(
             "overlay": False,
         }
     )
-    await on_confirm(cb, state=state, session=db_session)
+    await on_confirm(
+        cb,
+        state=state,
+        session=db_session,
+        storage=MagicMock(),
+        session_factory=MagicMock(),
+    )
 
     state.clear.assert_awaited()
     text = cb.message.edit_text.await_args.args[0]
-    # Mentions both candidate count and that engine isn't ready
-    assert "2" in text
+    assert "No clips" in text
+
+
+async def test_confirm_go_with_candidates_schedules_background_compile(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hands off to the compiler service via asyncio.create_task. We patch
+    `compile_progress_reel` so the test doesn't actually run ffmpeg."""
+    await UserRepo(db_session).upsert(user_id=100, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=100, names=["squat"])
+    repo = VideoRepo(db_session)
+    for _ in range(2):
+        await repo.create(
+            id=uuid.uuid4(), user_id=100, telegram_file_id="x",
+            storage_key="x", duration_sec=Decimal("1"), tag_ids=[tag.id],
+        )
+    await db_session.commit()
+
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "progress_tracker.handlers.compile_flow.compile_progress_reel", spy
+    )
+
+    cb = _callback("confirm:go", user_id=100)
+    cb.message.chat = SimpleNamespace(id=999)
+    cb.message.message_id = 7
+    cb.bot = AsyncMock()
+    state = _state()
+    state.get_data = AsyncMock(
+        return_value={
+            "tag_id": tag.id,
+            "tag_name": "squat",
+            "date_range": DateRange.ALL.value,
+            "duration": 30,
+            "overlay": False,
+        }
+    )
+
+    await on_confirm(
+        cb,
+        state=state,
+        session=db_session,
+        storage=MagicMock(),
+        session_factory=MagicMock(),
+    )
+
+    # Status message edited synchronously…
+    state.clear.assert_awaited()
+    text = cb.message.edit_text.await_args.args[0]
+    assert "Compiling" in text or "compiling" in text.lower()
+
+    # …and the actual compile runs in the background. Yield until the task
+    # gets a chance to dispatch the call.
+    import asyncio
+
+    for _ in range(5):
+        await asyncio.sleep(0)
+        if spy.await_count:
+            break
+    spy.assert_awaited_once()
 
 
 # ---------- router wiring ----------

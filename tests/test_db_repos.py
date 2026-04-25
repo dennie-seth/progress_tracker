@@ -314,6 +314,50 @@ async def test_list_for_user_tag_scoped_per_user(db_session: AsyncSession) -> No
     assert b[0].user_id == 2
 
 
+async def test_compilation_create_persists_row(db_session: AsyncSession) -> None:
+    from datetime import datetime, timezone
+
+    from progress_tracker.db.repos import CompilationRepo
+
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    await db_session.commit()
+
+    comp = await CompilationRepo(db_session).create(
+        id=uuid.uuid4(),
+        user_id=1,
+        tag_id=tag.id,
+        from_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        to_date=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        duration_sec=Decimal("12.500"),
+        storage_key="1/comp.mp4",
+    )
+    await db_session.commit()
+    assert comp.user_id == 1
+    assert comp.tag_id == tag.id
+    assert comp.duration_sec == Decimal("12.500")
+
+
+async def test_compilation_create_allows_null_tag(db_session: AsyncSession) -> None:
+    """Tag is FK SET NULL on delete — schema allows null tag_id."""
+    from progress_tracker.db.repos import CompilationRepo
+
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    await db_session.commit()
+
+    comp = await CompilationRepo(db_session).create(
+        id=uuid.uuid4(),
+        user_id=1,
+        tag_id=None,
+        from_date=None,
+        to_date=None,
+        duration_sec=Decimal("3"),
+        storage_key="1/comp2.mp4",
+    )
+    await db_session.commit()
+    assert comp.tag_id is None
+
+
 async def test_count_for_tags_scoped_per_user(db_session: AsyncSession) -> None:
     await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
     await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")

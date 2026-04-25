@@ -44,6 +44,11 @@ class DependenciesMiddleware(BaseMiddleware):
         async with self._factory() as session:
             data["session"] = session
             data["storage"] = self._storage
+            # Expose the factory too — long-running background tasks
+            # (e.g., the compile pipeline) need to open their own session
+            # because the per-update one is closed when this middleware
+            # returns.
+            data["session_factory"] = self._factory
             try:
                 result = await handler(event, data)
                 await session.commit()

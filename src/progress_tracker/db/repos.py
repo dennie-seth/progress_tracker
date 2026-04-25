@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from progress_tracker.db.models import Tag, User, Video, VideoTag
+from progress_tracker.db.models import Compilation, Tag, User, Video, VideoTag
 
 
 class UserRepo:
@@ -157,3 +157,34 @@ class VideoRepo:
             stmt = stmt.where(Video.id != exclude_video_id)
         result = await self._s.execute(stmt)
         return int(result.scalar_one() or 0)
+
+
+class CompilationRepo:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def create(
+        self,
+        *,
+        id: uuid.UUID,
+        user_id: int,
+        tag_id: int | None,
+        from_date: datetime | None,
+        to_date: datetime | None,
+        duration_sec: Decimal,
+        storage_key: str,
+        telegram_file_id: str | None = None,
+    ) -> Compilation:
+        comp = Compilation(
+            id=id,
+            user_id=user_id,
+            tag_id=tag_id,
+            from_date=from_date,
+            to_date=to_date,
+            duration_sec=duration_sec,
+            storage_key=storage_key,
+            telegram_file_id=telegram_file_id,
+        )
+        self._s.add(comp)
+        await self._s.flush()
+        return comp

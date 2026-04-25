@@ -15,12 +15,13 @@ edits the previous bot message in place to keep the chat tidy.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
 import structlog
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -30,10 +31,12 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from progress_tracker.db.models import Tag
 from progress_tracker.db.repos import TagRepo, VideoRepo
+from progress_tracker.services.compiler import compile_progress_reel
+from progress_tracker.storage.base import Storage
 
 _log = structlog.get_logger("progress_tracker.compile_flow")
 
@@ -238,7 +241,11 @@ async def on_overlay_selected(call: CallbackQuery, state: FSMContext) -> None:
 
 
 async def on_confirm(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    storage: Storage,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     choice = call.data.split(":", 1)[1]
     if choice == "cancel":
@@ -250,9 +257,18 @@ async def on_confirm(
     data = await state.get_data()
     user_id = call.from_user.id
     since = _resolve_since(data.get("date_range", ""))
+
+    # Quick pre-check so we don't spawn a background task for nothing.
     candidates = await VideoRepo(session).list_for_user_tag(
         user_id=user_id, tag_id=data["tag_id"], since=since
     )
+    if not candidates:
+        await call.message.edit_text(
+            "No clips matched the selected range. Cancelled."
+        )
+        await state.clear()
+        await call.answer()
+        return
 
     _log.info(
         "compile requested",
@@ -264,17 +280,89 @@ async def on_confirm(
         candidate_count=len(candidates),
     )
 
-    if not candidates:
-        await call.message.edit_text(
-            "No clips matched the selected range. Cancelled."
-        )
-    else:
-        await call.message.edit_text(
-            f"Got it — {len(candidates)} matching clip(s) selected.\n"
-            "(Compilation engine isn't wired yet — milestone 6.)"
-        )
-    await state.clear()
+    await call.message.edit_text(
+        f"⏳ Compiling from {len(candidates)} matching clip(s)…\n"
+        "This usually takes 10–60 seconds."
+    )
     await call.answer()
+    # Clear FSM data BEFORE the long task — a fresh /compile from the same
+    # user shouldn't be blocked on this one finishing.
+    await state.clear()
+
+    # Run the compile in the background so the bot stays responsive.
+    asyncio.create_task(
+        _run_compile_and_reply(
+            bot=call.bot,
+            chat_id=call.message.chat.id,
+            status_message_id=call.message.message_id,
+            user_id=user_id,
+            tag_id=int(data["tag_id"]),
+            target_duration=int(data["duration"]),
+            since=since,
+            overlay_dates=bool(data.get("overlay")),
+            session_factory=session_factory,
+            storage=storage,
+        )
+    )
+
+
+async def _run_compile_and_reply(
+    *,
+    bot: Bot,
+    chat_id: int,
+    status_message_id: int,
+    user_id: int,
+    tag_id: int,
+    target_duration: int,
+    since: datetime | None,
+    overlay_dates: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    storage: Storage,
+) -> None:
+    """Background task: do the actual compile and edit the status message.
+
+    Errors are caught and surfaced to the user as a friendly message; the
+    full traceback is logged. Without this catch, an exception in a fire-
+    and-forget task would only show up as a `Task exception was never
+    retrieved` warning.
+    """
+    try:
+        result = await compile_progress_reel(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            tag_id=tag_id,
+            target_duration=target_duration,
+            since=since,
+            overlay_dates=overlay_dates,
+            session_factory=session_factory,
+            storage=storage,
+        )
+    except Exception:
+        _log.exception("compile failed", user_id=user_id)
+        try:
+            await bot.edit_message_text(
+                "Compilation failed — check bot logs.",
+                chat_id=chat_id,
+                message_id=status_message_id,
+            )
+        except Exception:
+            _log.warning("could not edit status message after compile failure")
+        return
+
+    if result is None:
+        await bot.edit_message_text(
+            "No clips matched after selection. Nothing was generated.",
+            chat_id=chat_id,
+            message_id=status_message_id,
+        )
+        return
+
+    await bot.edit_message_text(
+        f"✅ Done — {result.clip_count} clip(s), {result.duration_sec:.1f}s.",
+        chat_id=chat_id,
+        message_id=status_message_id,
+    )
 
 
 async def on_cancel(message: Message, state: FSMContext) -> None:

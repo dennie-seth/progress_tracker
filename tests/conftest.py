@@ -53,6 +53,41 @@ def postgres_url() -> str:
     return _ORIGINAL_DATABASE_URL
 
 
+@pytest.fixture(scope="session")
+def sample_clips(tmp_path_factory: pytest.TempPathFactory) -> list:
+    """Three short MP4s with audio, generated once per session via ffmpeg lavfi.
+
+    The clips have distinct durations (1s/2s/3s) so end-to-end compile tests
+    can verify the speedup math actually changed the output duration. They
+    use the standard 320x240 H.264 + AAC at 30fps so the normalizer does
+    real work but the test runs in a few hundred milliseconds total.
+    """
+    import subprocess
+    from pathlib import Path
+
+    base = tmp_path_factory.mktemp("clips")
+    paths: list[Path] = []
+    for i, duration in enumerate([1, 2, 3]):
+        # Pick a different solid colour per clip so a human inspecting the
+        # compiled output can see them concatenated.
+        color = ["red", "green", "blue"][i]
+        out = base / f"clip_{i}_{duration}s.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", f"color={color}:size=320x240:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+                "-shortest", "-t", str(duration),
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                str(out),
+            ],
+            check=True,
+        )
+        paths.append(out)
+    return paths
+
+
 @pytest.fixture
 async def db_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     """Async engine bound to the compose `db` service. Disposed after each test."""
