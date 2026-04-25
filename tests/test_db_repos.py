@@ -180,6 +180,140 @@ async def test_count_for_tags_dedupes_video_with_multiple_tags(
     assert count == 1
 
 
+async def test_list_for_user_returns_users_tags_only(db_session: AsyncSession) -> None:
+    await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
+    await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")
+    await TagRepo(db_session).upsert_many(user_id=1, names=["squat", "pr"])
+    await TagRepo(db_session).upsert_many(user_id=2, names=["bachata"])
+    await db_session.commit()
+
+    tags = await TagRepo(db_session).list_for_user(user_id=1)
+    assert {t.name for t in tags} == {"squat", "pr"}
+
+
+async def test_list_for_user_orders_by_name(db_session: AsyncSession) -> None:
+    """Stable ordering so the inline keyboard isn't shuffled across calls."""
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    await TagRepo(db_session).upsert_many(user_id=1, names=["zulu", "alpha", "mike"])
+    await db_session.commit()
+
+    tags = await TagRepo(db_session).list_for_user(user_id=1)
+    assert [t.name for t in tags] == ["alpha", "mike", "zulu"]
+
+
+async def test_list_for_user_empty(db_session: AsyncSession) -> None:
+    await UserRepo(db_session).upsert(user_id=99, username="u", first_name="U")
+    await db_session.commit()
+    assert await TagRepo(db_session).list_for_user(user_id=99) == []
+
+
+async def test_tag_repo_get_returns_tag_when_owner_matches(db_session: AsyncSession) -> None:
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    await db_session.commit()
+    fetched = await TagRepo(db_session).get(tag_id=tag.id)
+    assert fetched is not None
+    assert fetched.name == "squat"
+    assert fetched.user_id == 1
+
+
+async def test_tag_repo_get_returns_none_for_unknown_id(db_session: AsyncSession) -> None:
+    assert await TagRepo(db_session).get(tag_id=99999) is None
+
+
+# ---------- VideoRepo.list_for_user_tag ----------
+
+
+async def test_list_for_user_tag_oldest_first(db_session: AsyncSession) -> None:
+    from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
+    from progress_tracker.db.models import Video
+
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    await db_session.commit()
+
+    repo = VideoRepo(db_session)
+    ids = []
+    for _ in range(3):
+        v = await repo.create(
+            id=uuid.uuid4(), user_id=1, telegram_file_id="x",
+            storage_key="x", duration_sec=Decimal("1"), tag_ids=[tag.id],
+        )
+        ids.append(v.id)
+    await db_session.commit()
+
+    # Force distinct created_at so ordering is meaningful in the test
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i, vid in enumerate(ids):
+        from datetime import timedelta
+        await db_session.execute(
+            update(Video).where(Video.id == vid).values(created_at=base + timedelta(days=i))
+        )
+    await db_session.commit()
+
+    listed = await repo.list_for_user_tag(user_id=1, tag_id=tag.id)
+    assert [v.id for v in listed] == ids
+
+
+async def test_list_for_user_tag_filters_by_since(db_session: AsyncSession) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import update
+
+    from progress_tracker.db.models import Video
+
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    await db_session.commit()
+
+    repo = VideoRepo(db_session)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new_ids = []
+    for i in range(4):
+        v = await repo.create(
+            id=uuid.uuid4(), user_id=1, telegram_file_id="x",
+            storage_key="x", duration_sec=Decimal("1"), tag_ids=[tag.id],
+        )
+        new_ids.append(v.id)
+        await db_session.execute(
+            update(Video).where(Video.id == v.id).values(created_at=base + timedelta(days=i))
+        )
+    await db_session.commit()
+
+    cutoff = base + timedelta(days=2)
+    listed = await repo.list_for_user_tag(user_id=1, tag_id=tag.id, since=cutoff)
+    # Only days 2 and 3 (>= cutoff)
+    assert [v.id for v in listed] == new_ids[2:]
+
+
+async def test_list_for_user_tag_scoped_per_user(db_session: AsyncSession) -> None:
+    await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
+    await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")
+    [t1] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    [t2] = await TagRepo(db_session).upsert_many(user_id=2, names=["squat"])
+    await db_session.commit()
+
+    repo = VideoRepo(db_session)
+    await repo.create(
+        id=uuid.uuid4(), user_id=1, telegram_file_id="x",
+        storage_key="x", duration_sec=Decimal("1"), tag_ids=[t1.id],
+    )
+    await repo.create(
+        id=uuid.uuid4(), user_id=2, telegram_file_id="y",
+        storage_key="y", duration_sec=Decimal("1"), tag_ids=[t2.id],
+    )
+    await db_session.commit()
+
+    a = await repo.list_for_user_tag(user_id=1, tag_id=t1.id)
+    b = await repo.list_for_user_tag(user_id=2, tag_id=t2.id)
+    assert len(a) == 1 and len(b) == 1
+    assert a[0].user_id == 1
+    assert b[0].user_id == 2
+
+
 async def test_count_for_tags_scoped_per_user(db_session: AsyncSession) -> None:
     await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
     await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")

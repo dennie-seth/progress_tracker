@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -57,6 +58,21 @@ class TagRepo:
         )
         return list(result.scalars().all())
 
+    async def list_for_user(self, user_id: int) -> list[Tag]:
+        """Return every tag owned by the user, ordered alphabetically by name.
+
+        Stable ordering matters for inline keyboards — users see the same
+        layout across calls.
+        """
+        result = await self._s.execute(
+            select(Tag).where(Tag.user_id == user_id).order_by(Tag.name)
+        )
+        return list(result.scalars().all())
+
+    async def get(self, tag_id: int) -> Tag | None:
+        """Fetch a tag by primary key. Returns None if missing."""
+        return await self._s.get(Tag, tag_id)
+
 
 class VideoRepo:
     def __init__(self, session: AsyncSession) -> None:
@@ -95,6 +111,32 @@ class VideoRepo:
             )
             await self._s.flush()
         return video
+
+    async def list_for_user_tag(
+        self,
+        user_id: int,
+        tag_id: int,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Video]:
+        """Return videos owned by `user_id` carrying `tag_id`, oldest first.
+
+        Optional `since` / `until` bound `Video.created_at` (inclusive lower,
+        exclusive upper) — used by the compile flow's date-range selector.
+        """
+        stmt = (
+            select(Video)
+            .join(VideoTag, VideoTag.video_id == Video.id)
+            .where(Video.user_id == user_id, VideoTag.tag_id == tag_id)
+            .order_by(Video.created_at)
+        )
+        if since is not None:
+            stmt = stmt.where(Video.created_at >= since)
+        if until is not None:
+            stmt = stmt.where(Video.created_at < until)
+        result = await self._s.execute(stmt)
+        return list(result.scalars().all())
 
     async def count_for_tags(
         self,
