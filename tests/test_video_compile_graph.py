@@ -11,9 +11,12 @@ from decimal import Decimal
 
 import pytest
 
+from pathlib import Path
+
 from progress_tracker.video.compile import (
     ClipMeta,
     atempo_chain,
+    build_ffmpeg_args,
     build_filter_complex,
 )
 
@@ -131,3 +134,39 @@ def test_filter_complex_rejects_empty_input() -> None:
 def test_filter_complex_rejects_zero_target() -> None:
     with pytest.raises(ValueError):
         build_filter_complex([_meta(2.0)], target_duration=0)
+
+
+# ---------- build_ffmpeg_args ----------
+
+
+def test_ffmpeg_args_attach_silent_audio_input() -> None:
+    """iOS Photos rejects video-only mp4 — we add a silent AAC track."""
+    args = build_ffmpeg_args(
+        inputs=[Path("a.mp4"), Path("b.mp4")],
+        filter_complex="dummy",
+        output=Path("out.mp4"),
+    )
+    # The lavfi anullsrc input is added after the real video inputs.
+    assert "-f" in args
+    lavfi_idx = args.index("-f")
+    assert args[lavfi_idx + 1] == "lavfi"
+    assert any("anullsrc" in a for a in args)
+    # Audio is mapped from input index 2 (= len(inputs)).
+    assert "-map" in args
+    assert "2:a" in args
+    # AAC, with -shortest so anullsrc doesn't run the output forever.
+    assert "-c:a" in args
+    assert "aac" in args
+    assert "-shortest" in args
+
+
+def test_ffmpeg_args_keep_libx264_yuv420p_faststart() -> None:
+    """Make sure the iOS-compatible video defaults haven't regressed."""
+    args = build_ffmpeg_args(
+        inputs=[Path("a.mp4")],
+        filter_complex="x",
+        output=Path("o.mp4"),
+    )
+    assert "libx264" in args
+    assert "yuv420p" in args
+    assert "+faststart" in args

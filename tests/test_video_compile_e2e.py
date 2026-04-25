@@ -35,6 +35,31 @@ async def test_compile_two_clips_fits_target_duration(
     assert Decimal("2.7") < result.duration < Decimal("3.5")
 
 
+async def test_compile_output_has_audio_stream(
+    sample_clips: list[Path], tmp_path: Path
+) -> None:
+    """iOS Photos rejects video-only mp4 — confirm we attach a silent AAC track."""
+    import json
+    import subprocess
+
+    inputs = [sample_clips[0]]  # 1s clip
+    metas = [ClipMeta(duration=Decimal("1.0"), date_label=None)]
+    out = tmp_path / "out.mp4"
+    await compile_videos(inputs, metas, target_duration=2.0, output=out)
+
+    raw = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", str(out),
+        ],
+        check=True, capture_output=True,
+    )
+    streams = json.loads(raw.stdout)["streams"]
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    assert audio_streams, "compile output must include an audio stream"
+    assert audio_streams[0]["codec_name"] == "aac"
+
+
 async def test_compile_speeds_up_long_clip(
     sample_clips: list[Path], tmp_path: Path
 ) -> None:

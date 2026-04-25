@@ -162,20 +162,37 @@ def build_ffmpeg_args(
     filter_complex: str,
     output: Path,
 ) -> list[str]:
-    """Assemble the argv for the ffmpeg subprocess. Pulled out for testability."""
+    """Assemble the argv for the ffmpeg subprocess. Pulled out for testability.
+
+    A silent stereo `anullsrc` is added as the last input and mapped to the
+    output as a real AAC track. iOS Photos and several other consumers refuse
+    to import video-only `.mp4` files; attaching silence costs ~1 KB and
+    makes the output behave like every other phone-shot clip.
+    """
     args = ["ffmpeg", "-y", "-loglevel", "error"]
     for path in inputs:
         args.extend(["-i", str(path)])
+
+    # Append the silent-audio input *after* all video inputs so its index in
+    # the ffmpeg argument list is `len(inputs)` — that's what `-map` references
+    # below. anullsrc is infinite; `-shortest` will truncate to the video.
+    silent_input_index = len(inputs)
+    args.extend(
+        [
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        ]
+    )
+
     args.extend(
         [
             "-filter_complex",
             filter_complex,
             "-map",
             "[outv]",
-            # `-an` discards any audio stream the inputs might have. We never
-            # build an `[outa]` in the filter graph (see `build_filter_complex`
-            # for why), so this is the matching switch on the output side.
-            "-an",
+            "-map",
+            f"{silent_input_index}:a",
+            "-shortest",  # output ends when video ends; anullsrc would run forever
             "-c:v",
             "libx264",
             "-preset",
@@ -184,6 +201,10 @@ def build_ffmpeg_args(
             "23",
             "-pix_fmt",
             "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
             "-movflags",
             "+faststart",
             str(output),
