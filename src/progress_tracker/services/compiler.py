@@ -134,11 +134,19 @@ async def compile_progress_reel(
         await session.commit()
 
     # Send to the chat. FSInputFile streams from disk so 2 GB compilations
-    # don't have to fit in memory.
+    # don't have to fit in memory. Width/height/duration are passed
+    # explicitly so Telegram's chat preview shows the correct aspect ratio
+    # — without these it falls back to a square placeholder even though
+    # the underlying stream is fine. supports_streaming gives Telegram a
+    # hint to play inline rather than offer it as a download.
     await bot.send_video(
         chat_id=chat_id,
         video=FSInputFile(final_path),
         caption=f"{len(picked)} clips · {rendered.duration:.1f}s",
+        width=rendered.width,
+        height=rendered.height,
+        duration=int(rendered.duration),
+        supports_streaming=True,
     )
 
     _log.info(

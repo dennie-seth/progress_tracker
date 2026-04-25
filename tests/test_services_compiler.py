@@ -114,10 +114,15 @@ async def test_compile_progress_reel_produces_video_and_records_row(
     # Storage holds the rendered file
     assert await storage.exists(result.storage_key)
 
-    # Bot was asked to send the video
+    # Bot was asked to send the video, with explicit dimensions so the
+    # chat preview gets the correct aspect ratio.
     bot.send_video.assert_awaited_once()
     kwargs = bot.send_video.await_args.kwargs
     assert kwargs.get("chat_id") == 999
+    assert kwargs.get("width") == 1080
+    assert kwargs.get("height") == 1920
+    assert isinstance(kwargs.get("duration"), int)
+    assert kwargs.get("supports_streaming") is True
 
 
 async def test_compile_progress_reel_with_no_matching_clips_returns_none(
