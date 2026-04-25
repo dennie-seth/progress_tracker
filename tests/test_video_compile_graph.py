@@ -66,28 +66,35 @@ def _meta(duration: float) -> ClipMeta:
 def test_filter_complex_includes_concat_for_n_inputs() -> None:
     metas = [_meta(2.0), _meta(2.0), _meta(2.0)]
     fc = build_filter_complex(metas, target_duration=6.0)
-    assert "concat=n=3:v=1:a=1" in fc
-    # Output labels at the end of concat
-    assert "[outv]" in fc and "[outa]" in fc
+    # Video-only concat — audio is intentionally dropped (clips may be silent).
+    assert "concat=n=3:v=1:a=0" in fc
+    assert "[outv]" in fc
+    assert "[outa]" not in fc
 
 
 def test_filter_complex_keeps_full_speed_when_clip_fits_budget() -> None:
-    """Clip duration == target/N → no setpts/atempo applied."""
+    """Clip duration == target/N → no setpts applied."""
     metas = [_meta(5.0), _meta(5.0)]  # budget = 5s, duration = 5s
     fc = build_filter_complex(metas, target_duration=10.0)
     assert "setpts=" not in fc
-    assert "atempo=" not in fc
 
 
 def test_filter_complex_speeds_up_long_clips() -> None:
-    """Clip 10s, budget 5s → speed factor 2 → setpts=PTS/2 + atempo=2."""
+    """Clip 10s, budget 5s → speed factor 2 → setpts=PTS/2."""
     metas = [_meta(10.0), _meta(5.0)]  # budget = 5s
     fc = build_filter_complex(metas, target_duration=10.0)
-    # The first clip is sped up by 2x
+    # The first clip is sped up by 2x via PTS divisor.
     assert "setpts=PTS/2" in fc
-    assert "atempo=2.0" in fc
-    # The second clip is not sped up
-    # (a fragile assertion if atempo names overlap — we trust the first check)
+
+
+def test_filter_complex_omits_audio_streams_entirely() -> None:
+    """No `[i:a]` references anywhere — that's exactly what broke on inputs
+    with no audio stream and is the reason audio is dropped."""
+    metas = [_meta(2.0), _meta(2.0)]
+    fc = build_filter_complex(metas, target_duration=4.0)
+    assert ":a]" not in fc
+    assert "atempo=" not in fc
+    assert "anull" not in fc
 
 
 def test_filter_complex_drawtext_when_overlay_set() -> None:

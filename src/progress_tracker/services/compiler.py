@@ -89,9 +89,11 @@ async def compile_progress_reel(
             input_path = await stack.enter_async_context(storage.open(video.storage_key))
             probed = await probe(input_path)
             input_paths.append(input_path)
-            label = (
-                video.created_at.strftime("%Y-%m-%d") if overlay_dates else None
-            )
+            # Prefer the container's `creation_time` tag (when the clip was
+            # actually recorded) over our DB row's upload time. Falls back to
+            # `Video.created_at` when the file has no creation_time metadata.
+            label_source = probed.creation_time or video.created_at
+            label = label_source.strftime("%Y-%m-%d") if overlay_dates else None
             metas.append(ClipMeta(duration=probed.duration, date_label=label))
 
         # Compile to a temp file first; copy into our Storage on success so

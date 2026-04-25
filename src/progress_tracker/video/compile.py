@@ -101,7 +101,11 @@ def build_filter_complex(
 
     Each clip is normalized (scale → pad → setsar → fps), optionally sped
     up if its duration exceeds the per-clip budget, optionally overlaid
-    with the drawtext date label, then all concatenated to `[outv]`/`[outa]`.
+    with the drawtext date label, then all video streams are concatenated
+    to `[outv]`. Audio is intentionally dropped — many training clips are
+    silent (no audio stream at all), and uniform `concat=n:v=1:a=1` fails
+    when even one input has no audio. A silent reel is what users want
+    anyway. `atempo` is kept in the public API for a future audio path.
     """
     n = len(clips)
     if n == 0:
@@ -125,10 +129,9 @@ def build_filter_complex(
             f"[{v_label}]"
         )
 
-        # 2) Speedup if needed.
+        # 2) Speedup if needed (video PTS only — audio is dropped).
         speed = float(clip.duration) / budget_per_clip
-        atempos = atempo_chain(speed) if speed > 1.0 + 1e-6 else []
-        if atempos:
+        if speed > 1.0 + 1e-6:
             v_speed = f"v{i}s"
             parts.append(f"[{v_label}]setpts=PTS/{speed:.6f}[{v_speed}]")
             v_label = v_speed
@@ -145,18 +148,9 @@ def build_filter_complex(
             )
             v_label = v_text
 
-        # 4) Audio leg.
-        a_label = f"a{i}"
-        if atempos:
-            parts.append(f"[{i}:a]" + ",".join(atempos) + f"[{a_label}]")
-        else:
-            # Pass-through to keep the concat input list uniform; an `anull`
-            # filter is the canonical no-op.
-            parts.append(f"[{i}:a]anull[{a_label}]")
+        concat_inputs.append(f"[{v_label}]")
 
-        concat_inputs.append(f"[{v_label}][{a_label}]")
-
-    parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]")
+    parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]")
     return ";".join(parts)
 
 
@@ -178,8 +172,10 @@ def build_ffmpeg_args(
             filter_complex,
             "-map",
             "[outv]",
-            "-map",
-            "[outa]",
+            # `-an` discards any audio stream the inputs might have. We never
+            # build an `[outa]` in the filter graph (see `build_filter_complex`
+            # for why), so this is the matching switch on the output side.
+            "-an",
             "-c:v",
             "libx264",
             "-preset",
@@ -188,8 +184,6 @@ def build_ffmpeg_args(
             "23",
             "-pix_fmt",
             "yuv420p",
-            "-c:a",
-            "aac",
             "-movflags",
             "+faststart",
             str(output),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +16,31 @@ class ProbeResult:
     width: int
     height: int
     fps: Decimal | None
+    # When the file was originally recorded — read from the container's
+    # `creation_time` tag (iPhones, Androids, and most cameras write this).
+    # `None` when the tag is absent or unparseable; callers should fall back
+    # to the upload time.
+    creation_time: datetime | None = None
+
+
+def _parse_creation_time(raw: str | None) -> datetime | None:
+    """Parse `creation_time` tag values like '2025-04-15T10:30:00.000000Z'.
+
+    ffprobe normalizes most container timestamps into ISO-8601 with a `Z`
+    suffix, but the format isn't guaranteed — return None on anything we
+    can't parse rather than blowing up the whole probe.
+    """
+    if not raw:
+        return None
+    candidate = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        # Most container metadata is UTC; default to that rather than naive.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 async def probe(path: Path) -> ProbeResult:
@@ -64,4 +90,18 @@ async def probe(path: Path) -> ProbeResult:
     else:
         fps = Decimal(fps_raw)
 
-    return ProbeResult(duration=duration, width=width, height=height, fps=fps)
+    # `creation_time` may live on the format or on the video stream depending
+    # on the container. Try both, format first.
+    creation_raw = (
+        fmt.get("tags", {}).get("creation_time")
+        or video_stream.get("tags", {}).get("creation_time")
+    )
+    creation_time = _parse_creation_time(creation_raw)
+
+    return ProbeResult(
+        duration=duration,
+        width=width,
+        height=height,
+        fps=fps,
+        creation_time=creation_time,
+    )
