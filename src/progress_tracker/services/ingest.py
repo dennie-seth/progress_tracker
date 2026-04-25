@@ -12,6 +12,7 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from progress_tracker.bot_api.files import normalize_remote_file_path
+from progress_tracker.bot_api.methods import DeleteFile
 from progress_tracker.db.models import Video
 from progress_tracker.db.repos import TagRepo, UserRepo, VideoRepo
 from progress_tracker.storage.base import Storage
@@ -109,9 +110,11 @@ async def ingest_video(
     # Cleanup-policy: ask the bot-api server to drop its own copy of the file
     # now that we own the bytes. Best-effort — the upload already succeeded
     # and the user has been told; a delete failure is a disk-usage concern on
-    # the server, not a correctness problem here.
+    # the server, not a correctness problem here. `deleteFile` is a local-
+    # Bot-API-server-only method (not in the cloud API), so aiogram doesn't
+    # ship a convenience wrapper — we invoke via the explicit method form.
     try:
-        await bot.delete_file(message.video.file_id)
+        await bot(DeleteFile(file_id=message.video.file_id))
     except Exception:
         _log.warning(
             "delete_file failed; bot-api copy may persist",
