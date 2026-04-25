@@ -164,6 +164,36 @@ async def test_dedup_caption_tags(db_session: AsyncSession, tmp_path: Path) -> N
     assert result.tag_names == ["squat"]
 
 
+async def test_partial_download_is_cleaned_up(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """If download_file fails after writing partial bytes, the orphan is deleted."""
+    storage = LocalStorage(root=tmp_path)
+
+    async def _fail(_path: str, destination: Path) -> None:
+        destination.write_bytes(b"partial")
+        raise RuntimeError("connection reset")
+
+    bot = MagicMock()
+    bot.token = "T"
+    bot.get_file = AsyncMock(
+        return_value=SimpleNamespace(file_id="x", file_path="videos/x.mp4")
+    )
+    bot.download_file = AsyncMock(side_effect=_fail)
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await ingest_video(
+            bot=bot,
+            message=_fake_message(caption="#squat"),
+            session=db_session,
+            storage=storage,
+        )
+
+    # No leftover .mp4 anywhere under the storage root.
+    leftovers = list(tmp_path.rglob("*.mp4"))
+    assert leftovers == [], f"orphan files left: {leftovers}"
+
+
 async def test_local_mode_absolute_file_path_is_normalized(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:

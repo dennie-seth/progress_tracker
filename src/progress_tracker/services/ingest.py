@@ -63,31 +63,37 @@ async def ingest_video(
     storage_key = f"{user.id}/{video_id}.mp4"
     target = await storage.write_path(storage_key)
 
-    # `bot.download(message.video, ...)` builds the URL from `getFile.file_path`
-    # verbatim. When the remote bot-api runs with `--local`, that field is an
-    # absolute filesystem path on the *server's* host — useless to us over
-    # HTTP. Resolve `getFile` ourselves, normalize the path, then download via
-    # the relative form (which the server still serves on `/file/bot<token>/...`).
-    tg_file = await bot.get_file(message.video.file_id)
-    relative_path = normalize_remote_file_path(tg_file.file_path or "", bot.token)
-    await bot.download_file(relative_path, destination=target)
-    await storage.commit(storage_key)
+    try:
+        # `bot.download(message.video, ...)` builds the URL from `getFile.file_path`
+        # verbatim. When the remote bot-api runs with `--local`, that field is an
+        # absolute filesystem path on the *server's* host — useless to us over
+        # HTTP. Resolve `getFile` ourselves, normalize the path, then download via
+        # the relative form (which the server still serves on `/file/bot<token>/...`).
+        tg_file = await bot.get_file(message.video.file_id)
+        relative_path = normalize_remote_file_path(tg_file.file_path or "", bot.token)
+        await bot.download_file(relative_path, destination=target)
+        await storage.commit(storage_key)
 
-    tg_video = message.video
-    video = await VideoRepo(session).create(
-        id=video_id,
-        user_id=user.id,
-        telegram_file_id=tg_video.file_id,
-        storage_key=storage_key,
-        duration_sec=Decimal(int(tg_video.duration)),
-        width=tg_video.width,
-        height=tg_video.height,
-        caption=message.caption,
-        tag_ids=tag_ids,
-    )
+        tg_video = message.video
+        video = await VideoRepo(session).create(
+            id=video_id,
+            user_id=user.id,
+            telegram_file_id=tg_video.file_id,
+            storage_key=storage_key,
+            duration_sec=Decimal(int(tg_video.duration)),
+            width=tg_video.width,
+            height=tg_video.height,
+            caption=message.caption,
+            tag_ids=tag_ids,
+        )
 
-    prior_count = await VideoRepo(session).count_for_tags(
-        user_id=user.id, tag_ids=tag_ids, exclude_video_id=video.id
-    )
+        prior_count = await VideoRepo(session).count_for_tags(
+            user_id=user.id, tag_ids=tag_ids, exclude_video_id=video.id
+        )
+    except Exception:
+        # The DB transaction will be rolled back by the middleware; remove the
+        # on-disk artefact so we don't accumulate orphaned files.
+        await storage.delete(storage_key)
+        raise
 
     return IngestResult(video=video, tag_names=tag_names, prior_count=prior_count)

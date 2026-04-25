@@ -93,3 +93,32 @@ async def test_rolls_back_on_exception(tmp_path: Path) -> None:
         await mw(handler, SimpleNamespace(), {})
     rollback_spy.assert_awaited_once()
     commit_spy.assert_not_awaited()
+
+
+async def test_rolls_back_when_commit_itself_fails(tmp_path: Path) -> None:
+    """Commit-failure must rollback so the session/connection is left clean."""
+    storage = LocalStorage(root=tmp_path)
+    rollback_spy = AsyncMock()
+
+    class FakeSession:
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            pass
+
+        async def commit(self) -> None:
+            raise RuntimeError("commit-failed")
+
+        async def rollback(self) -> None:
+            await rollback_spy()
+
+    fake_factory = MagicMock(return_value=FakeSession())
+    mw = DependenciesMiddleware(session_factory=fake_factory, storage=storage)  # type: ignore[arg-type]
+
+    async def handler(event: Any, data: dict[str, Any]) -> str:
+        return "ok"
+
+    with pytest.raises(RuntimeError, match="commit-failed"):
+        await mw(handler, SimpleNamespace(), {})
+    rollback_spy.assert_awaited_once()

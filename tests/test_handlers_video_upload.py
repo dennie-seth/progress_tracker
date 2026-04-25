@@ -87,6 +87,7 @@ async def test_returns_none_path_when_video_missing_caption(
     await on_video(msg, session=AsyncMock(), storage=AsyncMock())
     called.assert_not_awaited()
     msg.reply.assert_awaited_once()
+    assert NO_HASHTAG_HINT in msg.reply.await_args.args[0]
 
 
 def test_make_router_returns_video_router() -> None:

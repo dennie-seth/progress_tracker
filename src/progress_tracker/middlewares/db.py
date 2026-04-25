@@ -46,8 +46,11 @@ class DependenciesMiddleware(BaseMiddleware):
             data["storage"] = self._storage
             try:
                 result = await handler(event, data)
+                await session.commit()
+                return result
             except Exception:
+                # Rollback on either handler failure OR commit failure — the
+                # latter can happen on deadlock / connection loss / deferred
+                # constraint, and leaves the session unusable otherwise.
                 await session.rollback()
                 raise
-            await session.commit()
-            return result

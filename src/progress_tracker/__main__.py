@@ -31,8 +31,17 @@ async def _run() -> None:
     try:
         await dp.start_polling(bot, handle_signals=True)
     finally:
-        await bot.session.close()
-        await engine.dispose()
+        # Run each cleanup independently so a failure in one doesn't skip the
+        # others — `engine.dispose()` is the most important to reach because
+        # it returns DB connections to the pool.
+        try:
+            await bot.session.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            log.warning("failed to close bot session", exc_info=True)
+        try:
+            await engine.dispose()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            log.warning("failed to dispose db engine", exc_info=True)
 
 
 def main() -> None:

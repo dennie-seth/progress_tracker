@@ -70,3 +70,21 @@ async def test_rejects_path_traversal(tmp_path: Path) -> None:
         await storage.write_path("../escape.mp4")
     with pytest.raises(ValueError):
         await storage.write_path("a/../../escape.mp4")
+
+
+async def test_rejects_absolute_unix_key(tmp_path: Path) -> None:
+    """Defensive: an absolute key must not be treated as relative-to-root."""
+    storage = LocalStorage(root=tmp_path)
+    with pytest.raises(ValueError):
+        await storage.write_path("/etc/passwd")
+
+
+async def test_delete_no_op_when_path_is_directory(tmp_path: Path) -> None:
+    """Per the Storage contract, delete() is best-effort and must not raise on
+    keys that resolve to directories."""
+    storage = LocalStorage(root=tmp_path)
+    (tmp_path / "user42").mkdir()
+    # Should not raise — directories are not files we manage.
+    await storage.delete("user42")
+    # Directory is left intact.
+    assert (tmp_path / "user42").is_dir()

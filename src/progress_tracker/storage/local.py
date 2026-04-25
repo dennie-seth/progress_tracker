@@ -43,7 +43,10 @@ class LocalStorage:
 
     async def delete(self, key: str) -> None:
         target = self._resolve(key)
-        target.unlink(missing_ok=True)
+        # `unlink(missing_ok=True)` raises IsADirectoryError on directories;
+        # the Storage contract is no-op-on-unknown, so guard explicitly.
+        if target.is_file():
+            target.unlink()
 
     async def exists(self, key: str) -> bool:
         return self._resolve(key).exists()

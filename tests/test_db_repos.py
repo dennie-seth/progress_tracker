@@ -157,6 +157,29 @@ async def test_count_for_tags_returns_zero_when_no_tags(db_session: AsyncSession
     assert await repo.count_for_tags(user_id=1, tag_ids=[]) == 0
 
 
+async def test_count_for_tags_dedupes_video_with_multiple_tags(
+    db_session: AsyncSession,
+) -> None:
+    """A single video that matches several queried tags must count exactly once."""
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    tags = await TagRepo(db_session).upsert_many(user_id=1, names=["squat", "pr"])
+    await db_session.commit()
+
+    repo = VideoRepo(db_session)
+    await repo.create(
+        id=uuid.uuid4(),
+        user_id=1,
+        telegram_file_id="x",
+        storage_key="x",
+        duration_sec=Decimal("1"),
+        tag_ids=[t.id for t in tags],
+    )
+    await db_session.commit()
+
+    count = await repo.count_for_tags(user_id=1, tag_ids=[t.id for t in tags])
+    assert count == 1
+
+
 async def test_count_for_tags_scoped_per_user(db_session: AsyncSession) -> None:
     await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
     await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")
