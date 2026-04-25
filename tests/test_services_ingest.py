@@ -41,13 +41,23 @@ def _fake_message(
     return msg
 
 
-def _fake_bot_writing(content: bytes = b"\x00fakempayload") -> MagicMock:
-    """Returns a MagicMock Bot whose `download` writes bytes to the destination."""
-    async def _download(_video, destination: Path) -> None:
+def _fake_bot_writing(
+    content: bytes = b"\x00fakempayload",
+    *,
+    file_path: str = "videos/file_0.mp4",
+    token: str = "TEST:token",
+) -> MagicMock:
+    """Mock Bot whose download_file writes bytes; get_file returns a SimpleNamespace."""
+
+    async def _download_file(_file_path: str, destination: Path) -> None:
         destination.write_bytes(content)
 
     bot = MagicMock()
-    bot.download = AsyncMock(side_effect=_download)
+    bot.token = token
+    bot.get_file = AsyncMock(
+        return_value=SimpleNamespace(file_id="x", file_path=file_path)
+    )
+    bot.download_file = AsyncMock(side_effect=_download_file)
     return bot
 
 
@@ -90,8 +100,9 @@ async def test_first_upload_for_user(db_session: AsyncSession, tmp_path: Path) -
     assert await storage.exists(result.video.storage_key)
     async with storage.open(result.video.storage_key) as p:
         assert p.read_bytes() == b"hello-mp4"
-    # bot.download was called with the right destination
-    assert bot.download.await_count == 1
+    # The two-step download path was used
+    assert bot.get_file.await_count == 1
+    assert bot.download_file.await_count == 1
 
 
 async def test_prior_count_reflects_only_same_tags(db_session: AsyncSession, tmp_path: Path) -> None:
@@ -151,3 +162,26 @@ async def test_dedup_caption_tags(db_session: AsyncSession, tmp_path: Path) -> N
     )
     assert result is not None
     assert result.tag_names == ["squat"]
+
+
+async def test_local_mode_absolute_file_path_is_normalized(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """When the remote server runs with --local, getFile returns an absolute
+    filesystem path. We must strip the prefix before download_file."""
+    storage = LocalStorage(root=tmp_path)
+    token = "12345:ABC"
+    bot = _fake_bot_writing(
+        file_path=f"/var/lib/telegram-bot-api/{token}/videos/file_99.mp4",
+        token=token,
+    )
+    result = await ingest_video(
+        bot=bot,
+        message=_fake_message(caption="#squat"),
+        session=db_session,
+        storage=storage,
+    )
+    assert result is not None
+    # download_file must have been called with the *relative* path, not /var/lib/...
+    download_call = bot.download_file.await_args
+    assert download_call.args[0] == "videos/file_99.mp4"

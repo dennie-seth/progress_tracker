@@ -10,6 +10,7 @@ from aiogram import Bot
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from progress_tracker.bot_api.files import normalize_remote_file_path
 from progress_tracker.db.models import Video
 from progress_tracker.db.repos import TagRepo, UserRepo, VideoRepo
 from progress_tracker.storage.base import Storage
@@ -61,7 +62,15 @@ async def ingest_video(
     video_id = uuid.uuid4()
     storage_key = f"{user.id}/{video_id}.mp4"
     target = await storage.write_path(storage_key)
-    await bot.download(message.video, destination=target)
+
+    # `bot.download(message.video, ...)` builds the URL from `getFile.file_path`
+    # verbatim. When the remote bot-api runs with `--local`, that field is an
+    # absolute filesystem path on the *server's* host — useless to us over
+    # HTTP. Resolve `getFile` ourselves, normalize the path, then download via
+    # the relative form (which the server still serves on `/file/bot<token>/...`).
+    tg_file = await bot.get_file(message.video.file_id)
+    relative_path = normalize_remote_file_path(tg_file.file_path or "", bot.token)
+    await bot.download_file(relative_path, destination=target)
     await storage.commit(storage_key)
 
     tg_video = message.video
