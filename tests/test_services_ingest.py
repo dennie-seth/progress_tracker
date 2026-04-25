@@ -270,6 +270,31 @@ async def test_delete_file_failure_is_swallowed(
     bot.assert_awaited_once()  # ...and we *tried* to clean up
 
 
+async def test_telegram_not_found_on_delete_file_is_silent(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """Older bot-api builds answer `deleteFile` with HTTP 404 / method-not-
+    found. That's not a failure mode worth alerting on; ingest must succeed
+    without raising and without emitting a warning."""
+    from aiogram.exceptions import TelegramNotFound
+    from aiogram.methods import GetMe  # any TelegramMethod for the kwarg
+
+    storage = LocalStorage(root=tmp_path)
+    bot = _fake_bot_writing()
+    bot.side_effect = TelegramNotFound(
+        method=GetMe(), message="method not found"
+    )
+
+    result = await ingest_video(
+        bot=bot,
+        message=_fake_message(caption="#squat"),
+        session=db_session,
+        storage=storage,
+    )
+    assert result is not None
+    bot.assert_awaited_once()
+
+
 async def test_local_mode_absolute_file_path_is_normalized(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:

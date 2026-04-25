@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import structlog
 from aiogram import Bot
+from aiogram.exceptions import TelegramNotFound
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,6 +116,14 @@ async def ingest_video(
     # ship a convenience wrapper — we invoke via the explicit method form.
     try:
         await bot(DeleteFile(file_id=message.video.file_id))
+    except TelegramNotFound:
+        # Some older `telegram-bot-api` builds don't expose `deleteFile`.
+        # That's not an alarm — the upload succeeded; we just can't reclaim
+        # the server's disk. Log at debug so verbose runs can see it.
+        _log.debug(
+            "bot-api has no deleteFile method; cleanup unavailable",
+            file_id=message.video.file_id,
+        )
     except Exception:
         _log.warning(
             "delete_file failed; bot-api copy may persist",
