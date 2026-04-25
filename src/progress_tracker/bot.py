@@ -9,7 +9,7 @@ from aiogram.client.telegram import PRODUCTION, TelegramAPIServer
 from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from progress_tracker.bot_api.session import SocksAiohttpSession
+from progress_tracker.bot_api.session import CustomAiohttpSession
 from progress_tracker.config import Settings
 from progress_tracker.handlers import build_root_router
 from progress_tracker.middlewares.db import DependenciesMiddleware
@@ -17,13 +17,12 @@ from progress_tracker.storage.base import Storage
 
 
 def build_bot(settings: Settings) -> Bot:
-    """Create the aiogram Bot, honoring BOT_API_URL and SOCKS_PROXY_URL.
+    """Create the aiogram Bot, honoring BOT_API_URL, SOCKS_PROXY_URL, and
+    Basic Auth credentials.
 
-    Four cases:
-      - neither set → default cloud API, direct.
-      - BOT_API_URL only → custom server, direct.
-      - SOCKS_PROXY_URL only → cloud API through the SOCKS tunnel.
-      - both set → custom server through the SOCKS tunnel.
+    The four-by-two routing matrix collapses to: any custom-session feature
+    set (SOCKS or Basic Auth) → `CustomAiohttpSession`; otherwise the stock
+    `AiohttpSession`. The endpoint is `BOT_API_URL` if set, else cloud.
     """
     api = (
         TelegramAPIServer.from_base(settings.bot_api_url, is_local=False)
@@ -31,11 +30,20 @@ def build_bot(settings: Settings) -> Bot:
         else PRODUCTION
     )
 
+    # Only treat creds as set when *both* are present — half-set is almost
+    # always a misconfiguration and shouldn't produce a malformed header.
+    basic_auth: tuple[str, str] | None = (
+        (settings.bot_api_username, settings.bot_api_password)
+        if settings.bot_api_username and settings.bot_api_password
+        else None
+    )
+
     session: AiohttpSession
-    if settings.socks_proxy_url:
-        session = SocksAiohttpSession(
-            socks_proxy_url=settings.socks_proxy_url,
+    if settings.socks_proxy_url or basic_auth:
+        session = CustomAiohttpSession(
             api=api,
+            socks_proxy_url=settings.socks_proxy_url or None,
+            basic_auth=basic_auth,
         )
     else:
         session = AiohttpSession(api=api)

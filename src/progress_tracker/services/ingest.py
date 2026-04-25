@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
+import structlog
 from aiogram import Bot
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,8 @@ from progress_tracker.db.models import Video
 from progress_tracker.db.repos import TagRepo, UserRepo, VideoRepo
 from progress_tracker.storage.base import Storage
 from progress_tracker.utils.hashtags import parse_hashtags
+
+_log = structlog.get_logger("progress_tracker.ingest")
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,13 @@ async def ingest_video(
         # the relative form (which the server still serves on `/file/bot<token>/...`).
         tg_file = await bot.get_file(message.video.file_id)
         relative_path = normalize_remote_file_path(tg_file.file_path or "", bot.token)
+        _log.info(
+            "downloading video",
+            file_id=message.video.file_id,
+            raw_file_path=tg_file.file_path,
+            relative_path=relative_path,
+            file_size=getattr(tg_file, "file_size", None),
+        )
         await bot.download_file(relative_path, destination=target)
         await storage.commit(storage_key)
 

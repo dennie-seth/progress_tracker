@@ -93,3 +93,22 @@ def test_bot_api_and_socks_are_independent(monkeypatch: pytest.MonkeyPatch) -> N
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.bot_api_url == ""
     assert s.socks_proxy_url == "socks5://u:p@proxy:1080"
+
+
+# ---------- Milestone 2.5 follow-up: HTTP Basic Auth on Bot API server ----------
+
+
+def test_bot_api_username_defaults_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.bot_api_username == ""
+    assert s.bot_api_password == ""
+
+
+def test_bot_api_basic_auth_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    monkeypatch.setenv("BOT_API_USERNAME", "progress_bot")
+    monkeypatch.setenv("BOT_API_PASSWORD", "s3cret")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.bot_api_username == "progress_bot"
+    assert s.bot_api_password == "s3cret"

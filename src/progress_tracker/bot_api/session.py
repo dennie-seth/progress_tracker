@@ -1,34 +1,72 @@
-"""SOCKS5-aware aiogram session.
+"""Custom aiogram session that layers optional SOCKS5 and HTTP Basic Auth.
 
-aiogram's stock `AiohttpSession` passes a `proxy=` kwarg to aiohttp, which only
-supports HTTP proxies. For SOCKS5 we need `aiohttp-socks` and must substitute
-the TCP connector at session construction time — aiogram builds its
-`ClientSession` from `self._connector_type(**self._connector_init)`, so we
-replace `_connector_type` with a partial that routes through
-`ProxyConnector.from_url`. That keeps aiogram's existing `limit` / `ssl`
-kwargs flowing into the underlying TCP connector.
+aiogram's stock `AiohttpSession` only knows about HTTP proxies (the `proxy=`
+kwarg on aiohttp's request methods). For SOCKS5 we need `aiohttp-socks`'
+`ProxyConnector`; for Basic Auth we need to inject an `Authorization` header
+into the underlying `ClientSession`. This class supports both, independently.
+
+Usage:
+
+    # SOCKS only — same shape as the previous SocksAiohttpSession.
+    session = CustomAiohttpSession(socks_proxy_url="socks5://u:p@host:1080")
+
+    # Basic Auth only — for a server fronted by caddy/nginx with auth.
+    session = CustomAiohttpSession(basic_auth=("user", "password"))
+
+    # Both — useful while transitioning to a public server still behind SOCKS.
+    session = CustomAiohttpSession(
+        socks_proxy_url="socks5://u:p@host:1080",
+        basic_auth=("user", "password"),
+    )
 """
 
 from __future__ import annotations
 
+import base64
 from functools import partial
 from typing import Any
 
+import aiohttp
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiohttp_socks import ProxyConnector
 
 
-class SocksAiohttpSession(AiohttpSession):
-    """AiohttpSession that tunnels every request through a SOCKS5 proxy.
-
-    Pass `socks_proxy_url` in classic form: ``socks5://user:pass@host:port``.
-    Remaining kwargs (notably `api=...`) are forwarded to `AiohttpSession`.
-    """
-
-    def __init__(self, *, socks_proxy_url: str, **kwargs: Any) -> None:
+class CustomAiohttpSession(AiohttpSession):
+    def __init__(
+        self,
+        *,
+        socks_proxy_url: str | None = None,
+        basic_auth: tuple[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
-        self._socks_proxy_url = socks_proxy_url
-        # aiogram's AiohttpSession uses self._connector_type(**self._connector_init)
-        # to build the TCPConnector. Swap the factory for ProxyConnector.from_url
-        # with the SOCKS URL baked in; kwargs (limit, ssl, ...) still pass through.
-        self._connector_type = partial(ProxyConnector.from_url, socks_proxy_url)
+        if socks_proxy_url:
+            # Replace aiogram's TCPConnector factory with one that builds a
+            # SOCKS-aware connector from the proxy URL. The remaining kwargs
+            # (limit, ssl, ...) still flow through `_connector_init`.
+            self._connector_type = partial(ProxyConnector.from_url, socks_proxy_url)
+
+        self._auth_header: str | None = None
+        if basic_auth:
+            user, pw = basic_auth
+            encoded = base64.b64encode(f"{user}:{pw}".encode()).decode("ascii")
+            self._auth_header = f"Basic {encoded}"
+
+    async def create_session(self) -> aiohttp.ClientSession:
+        """Build the underlying ClientSession, attaching Basic Auth if configured.
+
+        We can't override `super().create_session()` cleanly because aiogram
+        builds the connector inside it; instead, recreate the session here
+        ourselves when an auth header is needed, mirroring the parent's
+        construction.
+        """
+        if self._auth_header is None:
+            return await super().create_session()
+
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                connector=self._connector_type(**self._connector_init),
+                headers={"Authorization": self._auth_header},
+            )
+            self._should_reset_connector = False
+        return self._session

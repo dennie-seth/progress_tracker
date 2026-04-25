@@ -47,6 +47,17 @@ class Settings(BaseSettings):
             "'socks5://user:pass@host:port'. None = direct connection."
         ),
     )
+    bot_api_username: str = Field(
+        default="",
+        description=(
+            "HTTP Basic Auth username for the Bot API server (e.g. when "
+            "fronted by caddy/nginx). Empty = no auth header sent."
+        ),
+    )
+    bot_api_password: str = Field(
+        default="",
+        description="HTTP Basic Auth password for the Bot API server. Secret.",
+    )
 
 
 def load_settings() -> Settings:
