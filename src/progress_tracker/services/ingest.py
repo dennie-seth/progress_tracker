@@ -106,4 +106,17 @@ async def ingest_video(
         await storage.delete(storage_key)
         raise
 
+    # Cleanup-policy: ask the bot-api server to drop its own copy of the file
+    # now that we own the bytes. Best-effort — the upload already succeeded
+    # and the user has been told; a delete failure is a disk-usage concern on
+    # the server, not a correctness problem here.
+    try:
+        await bot.delete_file(message.video.file_id)
+    except Exception:
+        _log.warning(
+            "delete_file failed; bot-api copy may persist",
+            file_id=message.video.file_id,
+            exc_info=True,
+        )
+
     return IngestResult(video=video, tag_names=tag_names, prior_count=prior_count)

@@ -113,6 +113,23 @@ duration, date range, and whether to overlay the upload date on each clip.
 - **Clip trimming rule**: if `clip.duration <= target/N`, keep at full speed;
   otherwise speed up via `setpts=PTS/speed` + `atempo` (chain `atempo` filters
   when speed > 2.0). Never truncate — the user chose "speed up" over "crop".
+- **Clip *selection* rule (milestone 6)**: don't include every matching clip;
+  always include the **oldest** and the **newest**, plus a small number of
+  **middle** clips sampled at random from the rest. The middle count scales
+  with how many clips are available so a long history doesn't drown the
+  oldest/newest signal:
+    - `N <= 4` clips matching: include all
+    - `5 <= N <= 9`: oldest + 2 middle (random) + newest = 4
+    - `10 <= N <= 19`: oldest + 3 middle (random) + newest = 5
+    - `N >= 20`: oldest + 3 middle (random) + newest = 5 (cap at 5)
+  Middle picks come from `videos[1:-1]` chronologically; a fixed RNG seed is
+  fine for reproducibility in tests, but production uses a fresh `random`.
+  This is what the user asked for; revisit only if they request it.
+- **Graceful shutdown**: `dp.start_polling(handle_signals=True)` installs
+  POSIX SIGINT/SIGTERM handlers, so `docker compose stop` unwinds cleanly
+  through the `finally` block in `__main__._run` (closes the bot's HTTP
+  session, disposes the DB engine, logs `shutting down` / `bot stopped`).
+  Don't replace this with a manual signal handler.
 - **Storage is behind a `Storage` Protocol** (`storage/base.py` → `LocalStorage`
   now, `S3Storage` stub for later). ffmpeg needs real filesystem paths, so the
   Protocol exposes `open(key) -> AsyncContextManager[Path]`. `LocalStorage`

@@ -23,8 +23,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/progress_tracker
       MEDIA_DIR: /data/media
     # Apply any pending migrations before starting the bot. `alembic upgrade
-    # head` is idempotent, so restarts are safe.
-    command: sh -c "alembic upgrade head && python -m progress_tracker"
+    # head` is idempotent, so restarts are safe. The `exec` makes Python
+    # replace sh as PID 1 after migrations finish, so SIGTERM from
+    # `docker compose stop` reaches our signal handler instead of being
+    # swallowed by the shell.
+    command: sh -c "alembic upgrade head && exec python -m progress_tracker"
     depends_on:
       db:
         condition: service_healthy

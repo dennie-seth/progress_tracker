@@ -47,7 +47,12 @@ def _fake_bot_writing(
     file_path: str = "videos/file_0.mp4",
     token: str = "TEST:token",
 ) -> MagicMock:
-    """Mock Bot whose download_file writes bytes; get_file returns a SimpleNamespace."""
+    """Mock Bot whose download_file writes bytes; get_file returns a SimpleNamespace.
+
+    `delete_file` is wired as a success-by-default AsyncMock so individual tests
+    can assert it was/wasn't awaited (and can swap in a side_effect to simulate
+    a delete failure).
+    """
 
     async def _download_file(_file_path: str, destination: Path) -> None:
         destination.write_bytes(content)
@@ -58,6 +63,7 @@ def _fake_bot_writing(
         return_value=SimpleNamespace(file_id="x", file_path=file_path)
     )
     bot.download_file = AsyncMock(side_effect=_download_file)
+    bot.delete_file = AsyncMock(return_value=True)
     return bot
 
 
@@ -192,6 +198,72 @@ async def test_partial_download_is_cleaned_up(
     # No leftover .mp4 anywhere under the storage root.
     leftovers = list(tmp_path.rglob("*.mp4"))
     assert leftovers == [], f"orphan files left: {leftovers}"
+
+
+async def test_calls_delete_file_after_successful_ingest(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """Cleanup-policy: bot.delete_file is awaited exactly once on a successful
+    ingest, with the file_id we just stored."""
+    storage = LocalStorage(root=tmp_path)
+    bot = _fake_bot_writing()
+
+    result = await ingest_video(
+        bot=bot,
+        message=_fake_message(file_id="tg-fid-123", caption="#squat"),
+        session=db_session,
+        storage=storage,
+    )
+    assert result is not None
+    bot.delete_file.assert_awaited_once_with("tg-fid-123")
+
+
+async def test_does_not_call_delete_file_when_download_fails(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """If the download path raises, no delete_file call is made — the bot-api
+    server still owns the bytes and we have nothing to clean up."""
+    storage = LocalStorage(root=tmp_path)
+
+    async def _fail(_path: str, destination: Path) -> None:
+        raise RuntimeError("download failed")
+
+    bot = MagicMock()
+    bot.token = "T"
+    bot.get_file = AsyncMock(
+        return_value=SimpleNamespace(file_id="x", file_path="videos/x.mp4")
+    )
+    bot.download_file = AsyncMock(side_effect=_fail)
+    bot.delete_file = AsyncMock(return_value=True)
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        await ingest_video(
+            bot=bot,
+            message=_fake_message(caption="#squat"),
+            session=db_session,
+            storage=storage,
+        )
+    bot.delete_file.assert_not_awaited()
+
+
+async def test_delete_file_failure_is_swallowed(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """A failing delete_file must not break the ingest — the upload already
+    succeeded and the user has been told. Worst case is a stale file on the
+    bot-api server, which the operator can clean up later."""
+    storage = LocalStorage(root=tmp_path)
+    bot = _fake_bot_writing()
+    bot.delete_file = AsyncMock(side_effect=RuntimeError("server unavailable"))
+
+    result = await ingest_video(
+        bot=bot,
+        message=_fake_message(caption="#squat"),
+        session=db_session,
+        storage=storage,
+    )
+    assert result is not None  # ingest reported success despite delete_file failing
+    bot.delete_file.assert_awaited_once()  # ...and we *tried* to clean up
 
 
 async def test_local_mode_absolute_file_path_is_normalized(

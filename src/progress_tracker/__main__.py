@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+from typing import Any
 
 import structlog
 
@@ -28,12 +30,39 @@ async def _run() -> None:
     bot = build_bot(settings)
     dp = build_dispatcher(session_factory=session_factory, storage=storage)
 
+    # Install our own SIGINT/SIGTERM handlers so `docker compose stop` and
+    # Ctrl+C land in `dp.stop_polling` cleanly and our `finally` block runs
+    # with visible log lines. aiogram's built-in `handle_signals=True` was
+    # observed to skip our cleanup logs in the docker stack, hence this
+    # explicit setup.
+    loop = asyncio.get_running_loop()
+
+    def _request_stop(sig: signal.Signals) -> None:
+        log.info("signal received, stopping polling", signal=sig.name)
+        # `stop_polling` is a coroutine; schedule it on the loop.
+        loop.create_task(dp.stop_polling())
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop, sig)
+        except NotImplementedError:
+            # Windows doesn't support add_signal_handler; fall back to default
+            # SIG behavior. We never run on bare Windows in production (only
+            # inside Linux containers via Rancher Desktop), so this is just a
+            # safety net for ad-hoc local runs.
+            log.debug("loop.add_signal_handler unsupported", signal=sig.name)
+
     try:
-        await dp.start_polling(bot, handle_signals=True)
+        # `handle_signals=False`: we drive the shutdown ourselves above.
+        # `close_bot_session=False`: we close it in the finally block so the
+        # log lines come out in a predictable order.
+        await dp.start_polling(
+            bot,
+            handle_signals=False,
+            close_bot_session=False,
+        )
     finally:
-        # Run each cleanup independently so a failure in one doesn't skip the
-        # others — `engine.dispose()` is the most important to reach because
-        # it returns DB connections to the pool.
+        log.info("shutting down")
         try:
             await bot.session.close()
         except Exception:  # noqa: BLE001 — best-effort cleanup
@@ -42,6 +71,7 @@ async def _run() -> None:
             await engine.dispose()
         except Exception:  # noqa: BLE001 — best-effort cleanup
             log.warning("failed to dispose db engine", exc_info=True)
+        log.info("bot stopped")
 
 
 def main() -> None:
