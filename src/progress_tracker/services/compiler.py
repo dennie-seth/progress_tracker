@@ -98,9 +98,13 @@ async def compile_progress_reel(
 
         # Compile to a temp file first; copy into our Storage on success so
         # a partial render never lands as our canonical artefact.
+        # Output is QuickTime/.mov rather than .mp4 — iOS Photos imports it
+        # cleanly where it sometimes refuses .mp4 with the same encoder
+        # settings (see commit history). Telegram and other consumers
+        # handle .mov fine.
         comp_id = uuid.uuid4()
         with tempfile.TemporaryDirectory(prefix="compile-") as tmpdir:
-            temp_out = Path(tmpdir) / f"{comp_id}.mp4"
+            temp_out = Path(tmpdir) / f"{comp_id}.mov"
             await compile_videos(
                 inputs=input_paths,
                 metas=metas,
@@ -108,7 +112,7 @@ async def compile_progress_reel(
                 output=temp_out,
             )
 
-            storage_key = f"{user_id}/compilations/{comp_id}.mp4"
+            storage_key = f"{user_id}/compilations/{comp_id}.mov"
             target = await storage.write_path(storage_key)
             target.write_bytes(temp_out.read_bytes())
             await storage.commit(storage_key)

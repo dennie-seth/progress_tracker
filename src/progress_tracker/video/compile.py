@@ -184,6 +184,17 @@ def build_ffmpeg_args(
         ]
     )
 
+    # Encoder settings tuned for iOS Photos compatibility — these closely
+    # match what an iPhone itself writes:
+    #   * H.264 main profile @ level 4.0 (1080p30 territory; broadest Photos
+    #     compatibility, avoids high-profile features some Photos importers
+    #     reject)
+    #   * yuv420p (chroma subsampling iOS expects)
+    #   * BT.709 color tagging (matches modern phone footage; without this,
+    #     Photos sometimes flags "incompatible" even on otherwise-fine files)
+    #   * AAC LC stereo @ 44.1 kHz, 128 kbps
+    #   * Output container chosen by file extension — caller passes a `.mov`
+    #     so the QuickTime muxer is selected.
     args.extend(
         [
             "-filter_complex",
@@ -195,12 +206,22 @@ def build_ffmpeg_args(
             "-shortest",  # output ends when video ends; anullsrc would run forever
             "-c:v",
             "libx264",
+            "-profile:v",
+            "main",
+            "-level:v",
+            "4.0",
             "-preset",
             "veryfast",
             "-crf",
             "23",
             "-pix_fmt",
             "yuv420p",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
             "-c:a",
             "aac",
             "-b:a",

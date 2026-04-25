@@ -163,10 +163,29 @@ def test_ffmpeg_args_attach_silent_audio_input() -> None:
 def test_ffmpeg_args_keep_libx264_yuv420p_faststart() -> None:
     """Make sure the iOS-compatible video defaults haven't regressed."""
     args = build_ffmpeg_args(
-        inputs=[Path("a.mp4")],
+        inputs=[Path("a.mov")],
         filter_complex="x",
-        output=Path("o.mp4"),
+        output=Path("o.mov"),
     )
     assert "libx264" in args
     assert "yuv420p" in args
     assert "+faststart" in args
+
+
+def test_ffmpeg_args_use_main_profile_and_bt709_for_ios_photos() -> None:
+    """Encoder settings match what iPhones write so iOS Photos accepts the
+    output. Regressing any of these has historically broken save-to-Photos."""
+    args = build_ffmpeg_args(
+        inputs=[Path("a.mov")],
+        filter_complex="x",
+        output=Path("o.mov"),
+    )
+    assert "-profile:v" in args
+    assert "main" in args
+    assert "-level:v" in args
+    assert "4.0" in args
+    # BT.709 color tagging
+    for flag in ("-color_primaries", "-color_trc", "-colorspace"):
+        assert flag in args
+    bt709_count = args.count("bt709")
+    assert bt709_count == 3

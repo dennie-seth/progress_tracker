@@ -25,7 +25,7 @@ async def test_compile_two_clips_fits_target_duration(
         ClipMeta(duration=Decimal("1.0"), date_label=None),
         ClipMeta(duration=Decimal("2.0"), date_label=None),
     ]
-    out = tmp_path / "out.mp4"
+    out = tmp_path / "out.mov"
     await compile_videos(inputs, metas, target_duration=4.0, output=out)
 
     assert out.exists()
@@ -44,7 +44,7 @@ async def test_compile_output_has_audio_stream(
 
     inputs = [sample_clips[0]]  # 1s clip
     metas = [ClipMeta(duration=Decimal("1.0"), date_label=None)]
-    out = tmp_path / "out.mp4"
+    out = tmp_path / "out.mov"
     await compile_videos(inputs, metas, target_duration=2.0, output=out)
 
     raw = subprocess.run(
@@ -69,7 +69,7 @@ async def test_compile_speeds_up_long_clip(
         ClipMeta(duration=Decimal("1.0"), date_label=None),
         ClipMeta(duration=Decimal("3.0"), date_label=None),
     ]
-    out = tmp_path / "out.mp4"
+    out = tmp_path / "out.mov"
     await compile_videos(inputs, metas, target_duration=2.0, output=out)
 
     assert out.exists()
@@ -87,7 +87,7 @@ async def test_compile_with_drawtext_overlay_succeeds(
         ClipMeta(duration=Decimal("1.0"), date_label="2026-01-15"),
         ClipMeta(duration=Decimal("2.0"), date_label="2026-04-26"),
     ]
-    out = tmp_path / "out.mp4"
+    out = tmp_path / "out.mov"
     await compile_videos(inputs, metas, target_duration=4.0, output=out)
     assert out.exists()
     # Just confirm we got a real video back; visual-correctness of overlay
@@ -108,7 +108,7 @@ async def test_compile_raises_on_mismatched_inputs_and_metas(tmp_path: Path) -> 
 
 async def test_compile_raises_when_ffmpeg_fails(tmp_path: Path) -> None:
     """A non-existent input causes ffmpeg to bail; we surface that as RuntimeError."""
-    out = tmp_path / "out.mp4"
+    out = tmp_path / "out.mov"
     with pytest.raises(RuntimeError):
         await compile_videos(
             inputs=[tmp_path / "does-not-exist.mp4"],
@@ -116,3 +116,35 @@ async def test_compile_raises_when_ffmpeg_fails(tmp_path: Path) -> None:
             target_duration=2.0,
             output=out,
         )
+
+
+async def test_compile_output_is_quicktime_with_h264_main(
+    sample_clips: list[Path], tmp_path: Path
+) -> None:
+    """Container + codec match what iOS Photos accepts for import."""
+    import json
+    import subprocess
+
+    out = tmp_path / "out.mov"
+    await compile_videos(
+        inputs=[sample_clips[0]],
+        metas=[ClipMeta(duration=Decimal("1.0"), date_label=None)],
+        target_duration=2.0,
+        output=out,
+    )
+
+    raw = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", "-show_format", str(out),
+        ],
+        check=True, capture_output=True,
+    )
+    data = json.loads(raw.stdout)
+    fmt_name = data["format"]["format_name"]
+    assert "mov" in fmt_name or "quicktime" in fmt_name.lower()
+
+    video = next(s for s in data["streams"] if s["codec_type"] == "video")
+    assert video["codec_name"] == "h264"
+    # ffprobe reports profile as a human string ("Main" / "High" / ...).
+    assert video.get("profile", "").lower() == "main"
