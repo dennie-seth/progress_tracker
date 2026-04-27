@@ -34,3 +34,9 @@ media/
 # OS
 .DS_Store
 Thumbs.db
+
+# docker-compose -v "${PWD}/...:/app/..." from PowerShell on Windows can
+# mis-parse the drive-letter colon and leave empty `<dir>;C` artefacts in
+# the repo root (e.g., src;C, tests;C). Ignore them so a stray re-run
+# doesn't pollute git status.
+*;C/
