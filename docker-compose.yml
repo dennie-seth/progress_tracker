@@ -9,14 +9,16 @@
 # For local dev against cloud Telegram (no bot-api server), use the
 # alternate compose file: `docker compose -f docker-compose.dev.yml up --build`.
 #
-# Prerequisite: the operator builds the `telegram-bot-api-local` image once
-# from the upstream tdlib/telegram-bot-api source. This file does not own
-# that build. The bot-api image runs as UID 1000 (`telegram-bot-api`); our
-# bot-app runs as UID 1000 too (`appuser`), so the read-only bind mount
-# below works without a `chown`.
+# Both images build from this repository: `Dockerfile` for bot-app and
+# `telegram-bot-api/Dockerfile` for the self-hosted bot-api. The first
+# `up --build` on a fresh VDS compiles tdlib + bot-api from source, which
+# takes ~10-15 minutes; subsequent rebuilds reuse the cache. Both images
+# run as UID 1000, so the shared bind mount below needs no `chown`.
 
 services:
   telegram-bot-api:
+    build:
+      context: ./telegram-bot-api
     image: telegram-bot-api-local
     container_name: telegram-bot-api
     restart: unless-stopped

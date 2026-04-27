@@ -28,21 +28,19 @@ self-hosted `telegram-bot-api` + Postgres on a single host, sharing the
 bot-api data directory so the bot reads uploaded videos directly off disk.
 
 ```bash
-# 1. Pre-build the bot-api image once from the upstream source:
-docker build -t telegram-bot-api-local /path/to/telegram-bot-api
-
-# 2. Create the shared data directory with the right ownership BEFORE the
+# 1. Create the shared data directory with the right ownership BEFORE the
 #    first `up`. Both containers run as UID 1000; pre-chowning saves you
 #    from a confusing "permission denied" on the bot-api's first write.
 mkdir -p telegram-bot-api-data
 sudo chown -R 1000:1000 telegram-bot-api-data
 
-# 3. Create .env once on the VDS (gitignored — `git pull` won't touch it):
+# 2. Create .env once on the VDS (gitignored — `git pull` won't touch it):
 cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH,
                                 # and POSTGRES_PASSWORD (compose refuses to start
                                 # without a value for that one)
 
-# 4. Bring up the full stack:
+# 3. Build everything and bring up the stack. The first build compiles
+#    tdlib + telegram-bot-api from source (~10-15 min); rebuilds reuse cache.
 docker compose up -d --build
 ```
 

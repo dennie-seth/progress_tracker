@@ -1,0 +1,6 @@
+# Force LF line endings for files that run inside Linux containers,
+# regardless of the host's `core.autocrlf` setting. Without this, a
+# CRLF-checked-out shell script breaks with "bad interpreter" inside the
+# image because the kernel tries to execute `/bin/sh\r`.
+*.sh text eol=lf
+Dockerfile text eol=lf
