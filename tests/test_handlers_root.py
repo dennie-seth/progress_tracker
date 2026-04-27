@@ -19,6 +19,12 @@ def test_includes_start_sub_router() -> None:
     assert "start" in names
 
 
+def test_includes_delete_flow_sub_router() -> None:
+    router = build_root_router()
+    names = [sub.name for sub in router.sub_routers]
+    assert "delete_flow" in names
+
+
 def test_each_call_returns_fresh_instance() -> None:
     """build_root_router should not leak state across calls."""
     a = build_root_router()

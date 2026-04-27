@@ -376,3 +376,137 @@ async def test_count_for_tags_scoped_per_user(db_session: AsyncSession) -> None:
     await db_session.commit()
     assert await repo.count_for_tags(user_id=1, tag_ids=[tag1.id]) == 1
     assert await repo.count_for_tags(user_id=2, tag_ids=[tag2.id]) == 1
+
+
+# ---------- VideoRepo.delete_for_user ----------
+#
+# Used by the /delete flow. Returns the storage_key on success (so the
+# service layer knows which file to remove from disk) or None if the row
+# doesn't exist or belongs to someone else.
+
+
+async def test_video_repo_delete_for_user_removes_row_and_returns_storage_key(
+    db_session: AsyncSession,
+) -> None:
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    repo = VideoRepo(db_session)
+    vid = await repo.create(
+        id=uuid.uuid4(),
+        user_id=1,
+        telegram_file_id="t",
+        storage_key="1/abc.mp4",
+        duration_sec=Decimal("1"),
+        tag_ids=[tag.id],
+    )
+    await db_session.commit()
+
+    storage_key = await repo.delete_for_user(video_id=vid.id, user_id=1)
+    await db_session.commit()
+    assert storage_key == "1/abc.mp4"
+
+    result = await db_session.execute(select(Video).where(Video.id == vid.id))
+    assert result.scalar_one_or_none() is None
+
+
+async def test_video_repo_delete_for_user_other_user_returns_none(
+    db_session: AsyncSession,
+) -> None:
+    """A user must not be able to delete someone else's video, even with a
+    correct uuid."""
+    await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
+    await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    repo = VideoRepo(db_session)
+    vid = await repo.create(
+        id=uuid.uuid4(),
+        user_id=1,
+        telegram_file_id="t",
+        storage_key="1/abc.mp4",
+        duration_sec=Decimal("1"),
+        tag_ids=[tag.id],
+    )
+    await db_session.commit()
+
+    storage_key = await repo.delete_for_user(video_id=vid.id, user_id=2)
+    await db_session.commit()
+    assert storage_key is None
+    # And the row must still be there.
+    surv = await db_session.execute(select(Video).where(Video.id == vid.id))
+    assert surv.scalar_one_or_none() is not None
+
+
+async def test_video_repo_delete_for_user_unknown_id_returns_none(
+    db_session: AsyncSession,
+) -> None:
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    storage_key = await VideoRepo(db_session).delete_for_user(
+        video_id=uuid.uuid4(), user_id=1
+    )
+    assert storage_key is None
+
+
+async def test_video_repo_delete_for_user_cascades_video_tags(
+    db_session: AsyncSession,
+) -> None:
+    """Schema cascades video_tags rows; delete_for_user must rely on that
+    instead of leaving orphan join rows."""
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    repo = VideoRepo(db_session)
+    vid = await repo.create(
+        id=uuid.uuid4(),
+        user_id=1,
+        telegram_file_id="t",
+        storage_key="1/abc.mp4",
+        duration_sec=Decimal("1"),
+        tag_ids=[tag.id],
+    )
+    await db_session.commit()
+
+    await repo.delete_for_user(video_id=vid.id, user_id=1)
+    await db_session.commit()
+
+    join_rows = await db_session.execute(
+        select(VideoTag).where(VideoTag.video_id == vid.id)
+    )
+    assert join_rows.scalars().all() == []
+
+
+async def test_video_repo_delete_for_user_does_not_touch_compilations(
+    db_session: AsyncSession,
+) -> None:
+    """Existing compiled reels survive a source-clip delete — they have no
+    FK to specific videos and their own rendered storage_key."""
+    from progress_tracker.db.models import Compilation
+    from progress_tracker.db.repos import CompilationRepo
+
+    await UserRepo(db_session).upsert(user_id=1, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=1, names=["squat"])
+    repo = VideoRepo(db_session)
+    vid = await repo.create(
+        id=uuid.uuid4(),
+        user_id=1,
+        telegram_file_id="t",
+        storage_key="1/abc.mp4",
+        duration_sec=Decimal("1"),
+        tag_ids=[tag.id],
+    )
+    comp = await CompilationRepo(db_session).create(
+        id=uuid.uuid4(),
+        user_id=1,
+        tag_id=tag.id,
+        from_date=None,
+        to_date=None,
+        duration_sec=Decimal("5"),
+        storage_key="1/compilations/x.mov",
+    )
+    await db_session.commit()
+
+    await repo.delete_for_user(video_id=vid.id, user_id=1)
+    await db_session.commit()
+
+    surv = await db_session.execute(
+        select(Compilation).where(Compilation.id == comp.id)
+    )
+    assert surv.scalar_one_or_none() is not None

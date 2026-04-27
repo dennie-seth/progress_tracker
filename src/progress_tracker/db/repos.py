@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,6 +137,27 @@ class VideoRepo:
             stmt = stmt.where(Video.created_at < until)
         result = await self._s.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_for_user(
+        self, *, video_id: uuid.UUID, user_id: int
+    ) -> str | None:
+        """Delete a single video the user owns; return its storage_key or None.
+
+        Returns the deleted row's `storage_key` so the service layer can also
+        remove the file from disk. Returns None when the row doesn't exist or
+        belongs to a different user — same response either way so callers
+        don't get a side-channel for "this id exists but isn't yours."
+
+        `video_tags` rows cascade automatically (FK ON DELETE CASCADE).
+        `compilations` have no FK to specific videos and survive untouched.
+        """
+        stmt = (
+            delete(Video)
+            .where(Video.id == video_id, Video.user_id == user_id)
+            .returning(Video.storage_key)
+        )
+        result = await self._s.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def count_for_tags(
         self,

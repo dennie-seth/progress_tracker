@@ -2,7 +2,7 @@
 
 from aiogram import Router
 
-from progress_tracker.handlers import compile_flow, start, video_upload
+from progress_tracker.handlers import compile_flow, delete_flow, start, video_upload
 
 __all__ = ["build_root_router"]
 
@@ -18,4 +18,5 @@ def build_root_router() -> Router:
     root.include_router(start.make_router())
     root.include_router(video_upload.make_router())
     root.include_router(compile_flow.make_router())
+    root.include_router(delete_flow.make_router())
     return root

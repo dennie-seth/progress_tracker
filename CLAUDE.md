@@ -36,6 +36,9 @@ What works right now:
 - Compile FSM + ffmpeg compiler: `/compile` walks the user through tag /
   range / duration / overlay choices and produces an iOS-Photos-compatible
   `.mov` reel.
+- `/delete` FSM: pick a tag, browse the 20 most-recent matching clips, two-
+  tap-delete to remove the row + on-disk file. Hard delete; existing
+  compilations that referenced the source clip survive untouched.
 
 Not yet built: history/library commands (milestone 4 partials), tests/CI
 workflow file (milestone 8). ffprobe isn't wired on ingest — for now we
