@@ -38,7 +38,9 @@ mkdir -p telegram-bot-api-data
 sudo chown -R 1000:1000 telegram-bot-api-data
 
 # 3. Create .env once on the VDS (gitignored — `git pull` won't touch it):
-cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH
+cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH,
+                                # and POSTGRES_PASSWORD (compose refuses to start
+                                # without a value for that one)
 
 # 4. Bring up the full stack:
 docker compose up -d --build

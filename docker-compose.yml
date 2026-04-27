@@ -24,10 +24,12 @@ services:
     # Scope: only the two credentials tdlib actually needs. Avoid `env_file:
     # .env` here because that would leak BOT_TOKEN / DATABASE_URL / SOCKS
     # creds into the bot-api process — anything that compromises tdlib
-    # could read them out of /proc/1/environ.
+    # could read them out of /proc/1/environ. The `:?` form fails compose-
+    # up loudly if the var isn't set rather than silently passing an empty
+    # value to tdlib (which would refuse to start with a confusing error).
     environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?TELEGRAM_API_ID must be set in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?TELEGRAM_API_HASH must be set in .env}
     volumes:
       - ./telegram-bot-api-data:/var/lib/telegram-bot-api
     healthcheck:
@@ -57,13 +59,17 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: progress_tracker
+      # User and database name take sensible defaults; password has NO
+      # default — `:?` makes compose fail loudly if it isn't in `.env`.
+      # A self-hosted production DB with the literal password "postgres"
+      # is exactly the gift packagers don't need.
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-progress_tracker}
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d progress_tracker"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-progress_tracker}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -81,7 +87,9 @@ services:
     stop_grace_period: 90s
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/progress_tracker
+      # DATABASE_URL is composed from the same env vars as the `db` service
+      # so they can never drift apart.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-progress_tracker}
       MEDIA_DIR: /data/media
       # bot-app reaches the bot-api server over the shared docker network.
       BOT_API_URL: http://telegram-bot-api:8081

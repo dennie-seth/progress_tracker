@@ -13,8 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # `docker compose stop` reaches Python cleanly even if the entrypoint chain
 # changes (the project rule in `.rules/general.md` already mandates a
 # graceful shutdown handler in __main__._run; tini is the belt-and-braces).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tini \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
