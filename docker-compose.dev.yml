@@ -1,3 +1,15 @@
+# Local dev stack — bot-app + Postgres only, talking to api.telegram.org
+# (or a remote bot-api server through SOCKS5+BasicAuth — see .env). Tests,
+# lint and type-check run inside this stack.
+#
+# Bring up:   docker compose -f docker-compose.dev.yml up --build
+# Run tests:  docker compose -f docker-compose.dev.yml run --rm \
+#                 -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" \
+#                 bot-app pytest
+#
+# For the production stack with a co-located telegram-bot-api server, see
+# the default `docker-compose.yml`.
+
 services:
   db:
     image: postgres:16-alpine
@@ -14,9 +26,12 @@ services:
       timeout: 3s
       retries: 10
 
-  bot:
-    build: .
+  bot-app:
+    build:
+      context: .
+      target: dev
     restart: unless-stopped
+    stop_grace_period: 90s
     env_file: .env
     environment:
       # Override the default in .env so the bot reaches the compose-network db.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -79,6 +79,21 @@ class Settings(BaseSettings):
             "<root>/<bot_token>/."
         ),
     )
+
+    @field_validator("socks_proxy_url", mode="before")
+    @classmethod
+    def _empty_str_is_none(cls, v: object) -> object:
+        """Treat an empty-string env var as "unset" for the optional field.
+
+        The production compose explicitly zeroes `SOCKS_PROXY_URL=""` to
+        defend against operators copying a dev `.env` onto the VDS. Without
+        this validator, that empty string would bind to `""` and code paths
+        like `if settings.socks_proxy_url is None` would silently mis-branch
+        even though `if settings.socks_proxy_url:` works.
+        """
+        if isinstance(v, str) and v == "":
+            return None
+        return v
 
 
 def load_settings() -> Settings:

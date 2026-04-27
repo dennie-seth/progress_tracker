@@ -11,7 +11,9 @@
 #
 # Prerequisite: the operator builds the `telegram-bot-api-local` image once
 # from the upstream tdlib/telegram-bot-api source. This file does not own
-# that build.
+# that build. The bot-api image runs as UID 1000 (`telegram-bot-api`); our
+# bot-app runs as UID 1000 too (`appuser`), so the read-only bind mount
+# below works without a `chown`.
 
 services:
   telegram-bot-api:
@@ -19,16 +21,32 @@ services:
     container_name: telegram-bot-api
     restart: unless-stopped
     stop_grace_period: 40s
+    # Scope: only the two credentials tdlib actually needs. Avoid `env_file:
+    # .env` here because that would leak BOT_TOKEN / DATABASE_URL / SOCKS
+    # creds into the bot-api process — anything that compromises tdlib
+    # could read them out of /proc/1/environ.
     environment:
-      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
-      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
     volumes:
       - ./telegram-bot-api-data:/var/lib/telegram-bot-api
+    healthcheck:
+      # bot-api has no HTTP /health route, but bash supports /dev/tcp/<host>/<port>
+      # for cheap reachability probes — succeed iff :8081 accepts a connection.
+      # bash is present in the upstream image's ubuntu:22.04 base.
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/8081"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     deploy:
       resources:
         limits:
+          # Uploads up to 2 GB stream through bot-api; tdlib buffers parts
+          # of the request in memory. 1 GB OOM-kills mid-upload — 3 GB is
+          # the headroom recommended by the upstream community.
           cpus: '1.0'
-          memory: 1G
+          memory: 3G
         reservations:
           cpus: '0.25'
           memory: 256M
@@ -53,8 +71,14 @@ services:
       - telegram_bot
 
   bot-app:
-    build: .
+    build:
+      context: .
+      target: prod
     restart: unless-stopped
+    # ffmpeg compiles can run 60 s+ inside an `asyncio.create_task`; the
+    # default 10 s grace SIGKILLs a render mid-stream. 90 s lets the
+    # signal handler in __main__._run unwind through its `finally` block.
+    stop_grace_period: 90s
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/progress_tracker
@@ -66,8 +90,10 @@ services:
       # downloading them over HTTP.
       BOT_API_LOCAL_FILES: "true"
       BOT_API_LOCAL_ROOT: /var/lib/telegram-bot-api
-      # SOCKS proxy + HTTP Basic Auth are not needed in this deployment;
-      # leave them unset. (.env may still define BOT_TOKEN, etc.)
+      # Defensively zero out the dev-from-home-only env vars in case the
+      # operator copied a dev `.env` over. The pydantic-settings validator
+      # in `config.py` maps "" -> None for the optional fields so this is
+      # equivalent to "unset" semantically.
       SOCKS_PROXY_URL: ""
       BOT_API_USERNAME: ""
       BOT_API_PASSWORD: ""
@@ -76,7 +102,7 @@ services:
       db:
         condition: service_healthy
       telegram-bot-api:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - media_data:/data/media
       # Same host directory bot-api writes to, mounted read-only here. The

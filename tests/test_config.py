@@ -85,6 +85,16 @@ def test_socks_proxy_url_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.socks_proxy_url == "socks5://u:p@proxy:1080"
 
 
+def test_empty_socks_proxy_url_normalizes_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The production compose zeroes SOCKS_PROXY_URL="" defensively. The
+    field-validator must turn that into None so `is None` checks behave
+    the same as when the env var is unset."""
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    monkeypatch.setenv("SOCKS_PROXY_URL", "")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.socks_proxy_url is None
+
+
 def test_bot_api_and_socks_are_independent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neither setting requires the other — they're orthogonal."""
     monkeypatch.setenv("BOT_TOKEN", "x")

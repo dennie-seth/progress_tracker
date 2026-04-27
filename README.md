@@ -28,11 +28,19 @@ self-hosted `telegram-bot-api` + Postgres on a single host, sharing the
 bot-api data directory so the bot reads uploaded videos directly off disk.
 
 ```bash
-# Pre-build the bot-api image once from the upstream source:
+# 1. Pre-build the bot-api image once from the upstream source:
 docker build -t telegram-bot-api-local /path/to/telegram-bot-api
 
-# Bring up the full stack:
+# 2. Create the shared data directory with the right ownership BEFORE the
+#    first `up`. Both containers run as UID 1000; pre-chowning saves you
+#    from a confusing "permission denied" on the bot-api's first write.
+mkdir -p telegram-bot-api-data
+sudo chown -R 1000:1000 telegram-bot-api-data
+
+# 3. Create .env once on the VDS (gitignored — `git pull` won't touch it):
 cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH
+
+# 4. Bring up the full stack:
 docker compose up -d --build
 ```
 
@@ -43,6 +51,29 @@ HTTP Basic Auth aren't needed when both services run on the same host.
 
 The "git clone → cd → docker compose up" shape is intentional so a dumb
 cron job can do `git pull && docker compose up -d --build` on the VDS.
+`.env` lives outside git, so cron pulls never overwrite secrets.
+
+### Backups
+
+The Postgres data lives in the named volume `db_data` and survives
+`docker compose down` but **not** `docker compose down -v` or a host wipe.
+Periodic dump:
+
+```bash
+docker compose exec db pg_dump -U postgres progress_tracker \
+    > "backups/$(date +%F).sql"
+```
+
+Restore:
+
+```bash
+docker compose exec -T db psql -U postgres -d progress_tracker \
+    < backups/<date>.sql
+```
+
+Compiled videos in the `media_data` volume and uploaded source clips in
+`telegram-bot-api-data/` are intentionally not part of the DB backup —
+they're recoverable from the chats that produced them.
 
 ## Local dev (cloud Telegram, no bot-api server)
 

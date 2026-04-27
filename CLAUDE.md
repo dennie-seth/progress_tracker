@@ -69,8 +69,10 @@ pip install -e ".[dev]"
 python -m progress_tracker      # reads .env, starts polling
 ```
 
-**Lint / type-check / test — inside the dev `bot` container** (image includes `[dev]` extras).
-Tests run against the dev compose so they don't drag the bot-api server up:
+**Lint / type-check / test — inside the dev `bot-app` container** (built
+from the `dev` Dockerfile target; that target adds the `[dev]` extras
+ruff/mypy/pytest/testcontainers on top of the slim prod image). Tests run
+against the dev compose so they don't drag the bot-api server up:
 ```powershell
 # Bind-mount src/ and tests/ so edits on host reflect without a rebuild.
 # The bot image uses an editable install, so the mounted src/ becomes the
@@ -78,12 +80,12 @@ Tests run against the dev compose so they don't drag the bot-api server up:
 docker compose -f docker-compose.dev.yml run --rm `
     -v "${PWD}/src:/app/src" `
     -v "${PWD}/tests:/app/tests" `
-    bot pytest
+    bot-app pytest
 
-docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest tests/test_config.py
-docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest -k speedup
-docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot ruff check .
-docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot mypy src/
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot-app pytest tests/test_config.py
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot-app pytest -k speedup
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot-app ruff check .
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot-app mypy src/
 ```
 
 The `tests/conftest.py` has an autouse fixture that isolates each test from

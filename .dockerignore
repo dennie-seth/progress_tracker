@@ -1,0 +1,44 @@
+# Keep the build context tiny — every cron `git pull && docker compose up
+# -d --build` re-tarballs whatever is here to the daemon.
+
+# VCS / editor
+.git
+.gitignore
+.idea
+.vscode
+.claude
+*.swp
+
+# Local stack data — never belongs in any image
+telegram-bot-api-data
+media
+test.mp4
+
+# Python build / cache artefacts
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+.venv
+venv
+
+# Tooling caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Tests / fixtures (the prod image doesn't ship them; the dev stage installs
+# the package editable and bind-mounts tests/ at runtime when needed)
+tests
+
+# Ops artefacts that don't belong in the image
+docker-compose*.yml
+.env
+.env.*
+
+# Stray volume-mount directories from PowerShell on Windows (see .gitignore)
+*;C
