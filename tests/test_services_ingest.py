@@ -1,8 +1,14 @@
 """Tests for the ingest service.
 
 These exercise the orchestration logic: hashtag parsing, user/tag upsert,
-storage write, video row creation, prior-count. The Telegram surface (Bot,
-Message) is mocked; the database and LocalStorage are real.
+storage write, video row creation, prior-count, and the fetch→cleanup
+sequence around the bytes-to-disk step. The Telegram surface (Bot, Message)
+is mocked; the database and LocalStorage are real.
+
+The two `FileFetcher` implementations have their own tests in
+`test_bot_api_fetcher.py` — here we plug the *real* `RemoteFileFetcher`
+against a mocked Bot for happy paths, and use a tiny stub fetcher when a
+test wants to assert the orchestration around fetch/cleanup directly.
 """
 
 from __future__ import annotations
@@ -12,9 +18,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram import Bot
+from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from progress_tracker.bot_api.methods import DeleteFile
+from progress_tracker.bot_api.fetcher import FileFetcher, RemoteFileFetcher
 from progress_tracker.services.ingest import IngestResult, ingest_video
 from progress_tracker.storage.local import LocalStorage
 
@@ -50,9 +58,9 @@ def _fake_bot_writing(
 ) -> AsyncMock:
     """Mock Bot whose download_file writes bytes; get_file returns a SimpleNamespace.
 
-    The bot itself is an AsyncMock so `await bot(DeleteFile(...))` works —
-    we assert via `bot.await_args` to check the cleanup call. Individual
-    tests can override `bot.side_effect` to simulate a deleteFile failure.
+    Used with a real `RemoteFileFetcher` so the full HTTP-style path is
+    exercised. `await bot(DeleteFile(...))` works because the mock itself is
+    an AsyncMock (the fetcher's cleanup does that).
     """
 
     async def _download_file(_file_path: str, destination: Path) -> None:
@@ -67,6 +75,32 @@ def _fake_bot_writing(
     return bot
 
 
+class _StubFetcher:
+    """In-process FileFetcher: writes a fixed payload from the test, tracks
+    fetch/cleanup calls, optionally raises on fetch."""
+
+    def __init__(
+        self,
+        *,
+        payload: bytes = b"stub",
+        fetch_error: Exception | None = None,
+    ) -> None:
+        self._payload = payload
+        self._fetch_error = fetch_error
+        self.fetch_calls: list[Path] = []
+        self.cleanup_calls: int = 0
+
+    async def fetch(self, *, bot: Bot, message: Message, target: Path) -> None:
+        self.fetch_calls.append(target)
+        if self._fetch_error is not None:
+            target.write_bytes(b"partial")
+            raise self._fetch_error
+        target.write_bytes(self._payload)
+
+    async def cleanup(self, *, bot: Bot, message: Message) -> None:
+        self.cleanup_calls += 1
+
+
 # ----------- behaviour -----------
 
 
@@ -75,7 +109,11 @@ async def test_returns_none_when_no_video(db_session: AsyncSession, tmp_path: Pa
     msg.video = None
     storage = LocalStorage(root=tmp_path)
     result = await ingest_video(
-        bot=_fake_bot_writing(), message=msg, session=db_session, storage=storage
+        bot=_fake_bot_writing(),
+        message=msg,
+        session=db_session,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
     )
     assert result is None
 
@@ -84,7 +122,11 @@ async def test_returns_none_when_no_hashtags(db_session: AsyncSession, tmp_path:
     msg = _fake_message(caption="just a video")
     storage = LocalStorage(root=tmp_path)
     result = await ingest_video(
-        bot=_fake_bot_writing(), message=msg, session=db_session, storage=storage
+        bot=_fake_bot_writing(),
+        message=msg,
+        session=db_session,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
     )
     assert result is None
 
@@ -95,7 +137,11 @@ async def test_first_upload_for_user(db_session: AsyncSession, tmp_path: Path) -
     bot = _fake_bot_writing(content=b"hello-mp4")
 
     result = await ingest_video(
-        bot=bot, message=msg, session=db_session, storage=storage
+        bot=bot,
+        message=msg,
+        session=db_session,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
     )
     await db_session.commit()
 
@@ -114,6 +160,7 @@ async def test_first_upload_for_user(db_session: AsyncSession, tmp_path: Path) -
 async def test_prior_count_reflects_only_same_tags(db_session: AsyncSession, tmp_path: Path) -> None:
     storage = LocalStorage(root=tmp_path)
     bot = _fake_bot_writing()
+    fetcher = RemoteFileFetcher()
 
     # Two prior #squat videos
     for i in range(2):
@@ -122,6 +169,7 @@ async def test_prior_count_reflects_only_same_tags(db_session: AsyncSession, tmp
             message=_fake_message(file_id=f"tg-{i}", caption="#squat"),
             session=db_session,
             storage=storage,
+            fetcher=fetcher,
         )
     await db_session.commit()
 
@@ -131,6 +179,7 @@ async def test_prior_count_reflects_only_same_tags(db_session: AsyncSession, tmp
         message=_fake_message(file_id="tg-new", caption="#squat day 3"),
         session=db_session,
         storage=storage,
+        fetcher=fetcher,
     )
     await db_session.commit()
     assert result is not None
@@ -142,6 +191,7 @@ async def test_prior_count_reflects_only_same_tags(db_session: AsyncSession, tmp
         message=_fake_message(file_id="tg-pr", caption="#pr"),
         session=db_session,
         storage=storage,
+        fetcher=fetcher,
     )
     await db_session.commit()
     assert result_pr is not None
@@ -154,7 +204,11 @@ async def test_storage_key_is_under_user_directory(
     storage = LocalStorage(root=tmp_path)
     msg = _fake_message(user_id=42, caption="#a")
     result = await ingest_video(
-        bot=_fake_bot_writing(), message=msg, session=db_session, storage=storage
+        bot=_fake_bot_writing(),
+        message=msg,
+        session=db_session,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
     )
     assert result is not None
     assert result.video.storage_key.startswith("42/")
@@ -164,7 +218,11 @@ async def test_dedup_caption_tags(db_session: AsyncSession, tmp_path: Path) -> N
     storage = LocalStorage(root=tmp_path)
     msg = _fake_message(caption="#squat #SQUAT #squat")
     result = await ingest_video(
-        bot=_fake_bot_writing(), message=msg, session=db_session, storage=storage
+        bot=_fake_bot_writing(),
+        message=msg,
+        session=db_session,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
     )
     assert result is not None
     assert result.tag_names == ["squat"]
@@ -173,26 +231,17 @@ async def test_dedup_caption_tags(db_session: AsyncSession, tmp_path: Path) -> N
 async def test_partial_download_is_cleaned_up(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """If download_file fails after writing partial bytes, the orphan is deleted."""
+    """If fetch fails after writing partial bytes, the orphan is deleted."""
     storage = LocalStorage(root=tmp_path)
-
-    async def _fail(_path: str, destination: Path) -> None:
-        destination.write_bytes(b"partial")
-        raise RuntimeError("connection reset")
-
-    bot = MagicMock()
-    bot.token = "T"
-    bot.get_file = AsyncMock(
-        return_value=SimpleNamespace(file_id="x", file_path="videos/x.mp4")
-    )
-    bot.download_file = AsyncMock(side_effect=_fail)
+    fetcher = _StubFetcher(fetch_error=RuntimeError("connection reset"))
 
     with pytest.raises(RuntimeError, match="connection reset"):
         await ingest_video(
-            bot=bot,
+            bot=AsyncMock(),
             message=_fake_message(caption="#squat"),
             session=db_session,
             storage=storage,
+            fetcher=fetcher,
         )
 
     # No leftover .mp4 anywhere under the storage root.
@@ -200,119 +249,40 @@ async def test_partial_download_is_cleaned_up(
     assert leftovers == [], f"orphan files left: {leftovers}"
 
 
-async def test_calls_delete_file_after_successful_ingest(
+async def test_fetch_and_cleanup_are_called_in_order_on_success(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """Cleanup-policy: `await bot(DeleteFile(file_id=...))` is awaited
-    exactly once with the file_id we just stored."""
+    """fetch must run before cleanup; cleanup runs exactly once after success."""
     storage = LocalStorage(root=tmp_path)
-    bot = _fake_bot_writing()
+    fetcher = _StubFetcher()
 
     result = await ingest_video(
-        bot=bot,
-        message=_fake_message(file_id="tg-fid-123", caption="#squat"),
+        bot=AsyncMock(),
+        message=_fake_message(caption="#squat"),
         session=db_session,
         storage=storage,
+        fetcher=fetcher,
     )
     assert result is not None
-    # The bot is invoked exactly once for cleanup, with a DeleteFile method.
-    bot.assert_awaited_once()
-    (called_method,), _ = bot.await_args
-    assert isinstance(called_method, DeleteFile)
-    assert called_method.file_id == "tg-fid-123"
+    assert len(fetcher.fetch_calls) == 1
+    assert fetcher.cleanup_calls == 1
 
 
-async def test_does_not_call_delete_file_when_download_fails(
+async def test_cleanup_is_skipped_when_fetch_fails(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """If the download path raises, no delete_file call is made — the bot-api
-    server still owns the bytes and we have nothing to clean up."""
+    """If fetch raises, ingest unwinds and cleanup is never called — there
+    is nothing to clean up on the bot-api side, and the bot-api server still
+    owns the source bytes."""
     storage = LocalStorage(root=tmp_path)
-
-    async def _fail(_path: str, destination: Path) -> None:
-        raise RuntimeError("download failed")
-
-    bot = AsyncMock()
-    bot.token = "T"
-    bot.get_file = AsyncMock(
-        return_value=SimpleNamespace(file_id="x", file_path="videos/x.mp4")
-    )
-    bot.download_file = AsyncMock(side_effect=_fail)
+    fetcher = _StubFetcher(fetch_error=RuntimeError("download failed"))
 
     with pytest.raises(RuntimeError, match="download failed"):
         await ingest_video(
-            bot=bot,
+            bot=AsyncMock(),
             message=_fake_message(caption="#squat"),
             session=db_session,
             storage=storage,
+            fetcher=fetcher,
         )
-    bot.assert_not_awaited()  # cleanup call never happened
-
-
-async def test_delete_file_failure_is_swallowed(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
-    """A failing delete_file must not break the ingest — the upload already
-    succeeded and the user has been told. Worst case is a stale file on the
-    bot-api server, which the operator can clean up later."""
-    storage = LocalStorage(root=tmp_path)
-    bot = _fake_bot_writing()
-    # Make `await bot(...)` raise to simulate a server-side delete failure.
-    bot.side_effect = RuntimeError("server unavailable")
-
-    result = await ingest_video(
-        bot=bot,
-        message=_fake_message(caption="#squat"),
-        session=db_session,
-        storage=storage,
-    )
-    assert result is not None  # ingest reported success despite delete_file failing
-    bot.assert_awaited_once()  # ...and we *tried* to clean up
-
-
-async def test_telegram_not_found_on_delete_file_is_silent(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
-    """Older bot-api builds answer `deleteFile` with HTTP 404 / method-not-
-    found. That's not a failure mode worth alerting on; ingest must succeed
-    without raising and without emitting a warning."""
-    from aiogram.exceptions import TelegramNotFound
-    from aiogram.methods import GetMe  # any TelegramMethod for the kwarg
-
-    storage = LocalStorage(root=tmp_path)
-    bot = _fake_bot_writing()
-    bot.side_effect = TelegramNotFound(
-        method=GetMe(), message="method not found"
-    )
-
-    result = await ingest_video(
-        bot=bot,
-        message=_fake_message(caption="#squat"),
-        session=db_session,
-        storage=storage,
-    )
-    assert result is not None
-    bot.assert_awaited_once()
-
-
-async def test_local_mode_absolute_file_path_is_normalized(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
-    """When the remote server runs with --local, getFile returns an absolute
-    filesystem path. We must strip the prefix before download_file."""
-    storage = LocalStorage(root=tmp_path)
-    token = "12345:ABC"
-    bot = _fake_bot_writing(
-        file_path=f"/var/lib/telegram-bot-api/{token}/videos/file_99.mp4",
-        token=token,
-    )
-    result = await ingest_video(
-        bot=bot,
-        message=_fake_message(caption="#squat"),
-        session=db_session,
-        storage=storage,
-    )
-    assert result is not None
-    # download_file must have been called with the *relative* path, not /var/lib/...
-    download_call = bot.download_file.await_args
-    assert download_call.args[0] == "videos/file_99.mp4"
+    assert fetcher.cleanup_calls == 0

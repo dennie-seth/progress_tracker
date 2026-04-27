@@ -32,6 +32,8 @@ _PROJECT_ENV_VARS = (
     "SOCKS_PROXY_URL",
     "BOT_API_USERNAME",
     "BOT_API_PASSWORD",
+    "BOT_API_LOCAL_FILES",
+    "BOT_API_LOCAL_ROOT",
 )
 _ORIGINAL_DATABASE_URL = os.environ.get("DATABASE_URL")
 _TABLES_IN_TRUNCATE_ORDER = "users, tags, videos, video_tags, compilations"

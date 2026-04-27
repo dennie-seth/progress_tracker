@@ -8,7 +8,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from progress_tracker.bot import build_bot, build_dispatcher
+from progress_tracker.bot import build_bot, build_dispatcher, build_fetcher
+from progress_tracker.bot_api.fetcher import LocalFileFetcher, RemoteFileFetcher
 from progress_tracker.bot_api.session import CustomAiohttpSession
 from progress_tracker.config import Settings
 
@@ -149,3 +150,45 @@ async def test_build_bot_partial_basic_auth_is_ignored() -> None:
         assert not isinstance(bot.session, CustomAiohttpSession)
     finally:
         await bot.session.close()
+
+
+# ---------- VDS co-location: build_fetcher + dispatcher wiring ----------
+
+
+def test_build_fetcher_default_is_remote() -> None:
+    """Dev-from-home: HTTP-download path, with DeleteFile cleanup."""
+    fetcher = build_fetcher(_fake_settings())
+    assert isinstance(fetcher, RemoteFileFetcher)
+
+
+def test_build_fetcher_returns_local_when_local_files_enabled() -> None:
+    """Co-located VDS: read directly off the shared filesystem, no cleanup."""
+    fetcher = build_fetcher(
+        _fake_settings(
+            bot_api_local_files=True,
+            bot_api_local_root="/var/lib/telegram-bot-api",
+        )
+    )
+    assert isinstance(fetcher, LocalFileFetcher)
+
+
+def test_build_dispatcher_attaches_fetcher_to_middleware() -> None:
+    """If session_factory + storage + fetcher are all provided, the
+    DependenciesMiddleware exposes the fetcher to handlers via `data`."""
+    from unittest.mock import MagicMock
+
+    from progress_tracker.middlewares.db import DependenciesMiddleware
+
+    factory = MagicMock()
+    storage = MagicMock()
+    fetcher = RemoteFileFetcher()
+    dp = build_dispatcher(
+        session_factory=factory, storage=storage, fetcher=fetcher
+    )
+    deps_mws = [
+        mw
+        for mw in dp.update.outer_middleware
+        if isinstance(mw, DependenciesMiddleware)
+    ]
+    assert len(deps_mws) == 1
+    assert deps_mws[0]._fetcher is fetcher

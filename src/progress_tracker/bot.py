@@ -9,6 +9,11 @@ from aiogram.client.telegram import PRODUCTION, TelegramAPIServer
 from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from progress_tracker.bot_api.fetcher import (
+    FileFetcher,
+    LocalFileFetcher,
+    RemoteFileFetcher,
+)
 from progress_tracker.bot_api.session import CustomAiohttpSession
 from progress_tracker.config import Settings
 from progress_tracker.handlers import build_root_router
@@ -55,25 +60,46 @@ def build_bot(settings: Settings) -> Bot:
     )
 
 
+def build_fetcher(settings: Settings) -> FileFetcher:
+    """Pick the file-fetcher strategy from settings.
+
+    `BOT_API_LOCAL_FILES=true` selects the co-located VDS deployment where
+    bot-app and telegram-bot-api share a filesystem; off (the default) keeps
+    the HTTPS-download path used for dev-from-home over SOCKS+BasicAuth.
+    See `bot_api.fetcher` for the rationale.
+    """
+    if settings.bot_api_local_files:
+        return LocalFileFetcher(
+            root=settings.bot_api_local_root,
+            token=settings.bot_token,
+        )
+    return RemoteFileFetcher()
+
+
 def build_dispatcher(
     *,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     storage: Storage | None = None,
+    fetcher: FileFetcher | None = None,
 ) -> Dispatcher:
     """Create the Dispatcher wired with all feature routers.
 
     MemoryStorage is fine for a single-instance bot. Switch to Redis-backed
     storage when running multiple replicas.
 
-    When `session_factory` and `storage` are both supplied, a
-    `DependenciesMiddleware` is attached so handlers can request `session`
-    and `storage` as kwargs. They're optional so unit tests can build a
-    minimal dispatcher without a database.
+    When `session_factory`, `storage`, and `fetcher` are all supplied, a
+    `DependenciesMiddleware` is attached so handlers can request `session`,
+    `storage`, and `fetcher` as kwargs. They're optional so unit tests can
+    build a minimal dispatcher without a database.
     """
     dp = Dispatcher(storage=MemoryStorage())
-    if session_factory is not None and storage is not None:
+    if session_factory is not None and storage is not None and fetcher is not None:
         dp.update.outer_middleware(
-            DependenciesMiddleware(session_factory=session_factory, storage=storage)
+            DependenciesMiddleware(
+                session_factory=session_factory,
+                storage=storage,
+                fetcher=fetcher,
+            )
         )
     dp.include_router(build_root_router())
     return dp

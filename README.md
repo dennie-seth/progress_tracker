@@ -30,6 +30,27 @@ docker compose up --build
 
 Then DM your bot `/start`.
 
+## Deploy on a VDS (production)
+
+For a production deployment that co-locates the bot with a self-hosted
+`telegram-bot-api` server (so the bot reads uploaded videos directly off
+shared disk instead of downloading them over HTTP), use the dedicated
+compose file:
+
+```bash
+# Pre-build the bot-api image once from the upstream source:
+docker build -t telegram-bot-api-local /path/to/telegram-bot-api
+
+# Bring up bot-app + telegram-bot-api + postgres on the VDS:
+cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH
+docker compose -f docker-compose.vds.yml up -d --build
+```
+
+That compose file sets `BOT_API_LOCAL_FILES=true` so the bot uses
+`LocalFileFetcher` (direct disk read, no `DeleteFile` cleanup) and bind-
+mounts `./telegram-bot-api-data` read-only into the bot container. SOCKS
+and HTTP Basic Auth aren't needed when both services run on the same host.
+
 ## Quick start (local, without Docker)
 
 ```bash

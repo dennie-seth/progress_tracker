@@ -1,8 +1,13 @@
-"""Outer middleware that opens a DB session and exposes it (and storage) to handlers.
+"""Outer middleware that opens a DB session and exposes the per-handler deps.
 
 Handlers declare the deps they need by listing them in their signature, e.g.:
 
-    async def on_video(message: Message, session: AsyncSession, storage: Storage) -> None:
+    async def on_video(
+        message: Message,
+        session: AsyncSession,
+        storage: Storage,
+        fetcher: FileFetcher,
+    ) -> None:
         ...
 
 aiogram resolves those kwargs from the `data` dict this middleware mutates.
@@ -17,13 +22,15 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from progress_tracker.bot_api.fetcher import FileFetcher
 from progress_tracker.storage.base import Storage
 
 
 class DependenciesMiddleware(BaseMiddleware):
     """Opens a session per update, commits on success, rolls back on error.
 
-    Storage is a long-lived singleton, so it's just stashed in `data`.
+    Storage and the file fetcher are long-lived singletons, so they're just
+    stashed in `data`.
     """
 
     def __init__(
@@ -31,9 +38,11 @@ class DependenciesMiddleware(BaseMiddleware):
         *,
         session_factory: async_sessionmaker[AsyncSession],
         storage: Storage,
+        fetcher: FileFetcher,
     ) -> None:
         self._factory = session_factory
         self._storage = storage
+        self._fetcher = fetcher
 
     async def __call__(
         self,
@@ -44,6 +53,7 @@ class DependenciesMiddleware(BaseMiddleware):
         async with self._factory() as session:
             data["session"] = session
             data["storage"] = self._storage
+            data["fetcher"] = self._fetcher
             # Expose the factory too — long-running background tasks
             # (e.g., the compile pipeline) need to open their own session
             # because the per-update one is closed when this middleware

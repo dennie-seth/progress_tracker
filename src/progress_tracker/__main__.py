@@ -8,7 +8,7 @@ from typing import Any
 
 import structlog
 
-from progress_tracker.bot import build_bot, build_dispatcher
+from progress_tracker.bot import build_bot, build_dispatcher, build_fetcher
 from progress_tracker.config import load_settings
 from progress_tracker.db.session import create_engine, create_session_factory
 from progress_tracker.logging_setup import configure_logging
@@ -20,7 +20,11 @@ async def _run() -> None:
     configure_logging(settings.log_level)
 
     log = structlog.get_logger("progress_tracker")
-    log.info("starting bot", media_dir=str(settings.media_dir))
+    log.info(
+        "starting bot",
+        media_dir=str(settings.media_dir),
+        bot_api_local_files=settings.bot_api_local_files,
+    )
 
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
@@ -28,7 +32,12 @@ async def _run() -> None:
     settings.media_dir.mkdir(parents=True, exist_ok=True)
 
     bot = build_bot(settings)
-    dp = build_dispatcher(session_factory=session_factory, storage=storage)
+    fetcher = build_fetcher(settings)
+    dp = build_dispatcher(
+        session_factory=session_factory,
+        storage=storage,
+        fetcher=fetcher,
+    )
 
     # Install our own SIGINT/SIGTERM handlers so `docker compose stop` and
     # Ctrl+C land in `dp.stop_polling` cleanly and our `finally` block runs

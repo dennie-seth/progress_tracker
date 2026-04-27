@@ -112,3 +112,30 @@ def test_bot_api_basic_auth_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.bot_api_username == "progress_bot"
     assert s.bot_api_password == "s3cret"
+
+
+# ---------- VDS co-location: read source files directly from disk ----------
+
+
+def test_bot_api_local_files_defaults_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default is the dev-from-home (HTTP-download) behaviour."""
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.bot_api_local_files is False
+
+
+def test_bot_api_local_root_default_matches_bot_api_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.bot_api_local_root == "/var/lib/telegram-bot-api"
+
+
+def test_bot_api_local_files_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    monkeypatch.setenv("BOT_API_LOCAL_FILES", "true")
+    monkeypatch.setenv("BOT_API_LOCAL_ROOT", "/srv/tg")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.bot_api_local_files is True
+    assert s.bot_api_local_root == "/srv/tg"

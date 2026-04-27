@@ -31,7 +31,9 @@ async def test_replies_when_caption_has_no_hashtag(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         "progress_tracker.handlers.video_upload.ingest_video", called
     )
-    await on_video(msg, session=AsyncMock(), storage=AsyncMock())
+    await on_video(
+        msg, session=AsyncMock(), storage=AsyncMock(), fetcher=AsyncMock()
+    )
     called.assert_not_awaited()
     msg.reply.assert_awaited_once()
     args, kwargs = msg.reply.await_args
@@ -42,17 +44,23 @@ async def test_replies_with_first_clip_message(monkeypatch: pytest.MonkeyPatch) 
     msg = _msg(caption="#squat")
     fake_video = SimpleNamespace(id="uuid")
     result = IngestResult(video=fake_video, tag_names=["squat"], prior_count=0)
+    ingest_spy = AsyncMock(return_value=result)
     monkeypatch.setattr(
-        "progress_tracker.handlers.video_upload.ingest_video",
-        AsyncMock(return_value=result),
+        "progress_tracker.handlers.video_upload.ingest_video", ingest_spy
     )
-    await on_video(msg, session=AsyncMock(), storage=AsyncMock())
+    fetcher = AsyncMock()
+    await on_video(
+        msg, session=AsyncMock(), storage=AsyncMock(), fetcher=fetcher
+    )
 
     msg.reply.assert_awaited_once()
     text = msg.reply.await_args.args[0]
     assert "Saved" in text
     assert "#squat" in text
     assert "first clip" in text.lower() or "first" in text.lower()
+    # Fetcher must be forwarded to ingest_video so the service uses the
+    # injected strategy (Remote vs Local).
+    assert ingest_spy.await_args.kwargs["fetcher"] is fetcher
 
 
 async def test_replies_with_prior_count_and_offers_reel(
@@ -65,7 +73,9 @@ async def test_replies_with_prior_count_and_offers_reel(
         "progress_tracker.handlers.video_upload.ingest_video",
         AsyncMock(return_value=result),
     )
-    await on_video(msg, session=AsyncMock(), storage=AsyncMock())
+    await on_video(
+        msg, session=AsyncMock(), storage=AsyncMock(), fetcher=AsyncMock()
+    )
 
     msg.reply.assert_awaited_once()
     text = msg.reply.await_args.args[0]
@@ -84,7 +94,9 @@ async def test_returns_none_path_when_video_missing_caption(
     monkeypatch.setattr(
         "progress_tracker.handlers.video_upload.ingest_video", called
     )
-    await on_video(msg, session=AsyncMock(), storage=AsyncMock())
+    await on_video(
+        msg, session=AsyncMock(), storage=AsyncMock(), fetcher=AsyncMock()
+    )
     called.assert_not_awaited()
     msg.reply.assert_awaited_once()
     assert NO_HASHTAG_HINT in msg.reply.await_args.args[0]

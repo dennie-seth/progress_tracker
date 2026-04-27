@@ -10,26 +10,34 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from progress_tracker.bot_api.fetcher import RemoteFileFetcher
 from progress_tracker.db.session import create_session_factory
 from progress_tracker.middlewares.db import DependenciesMiddleware
 from progress_tracker.storage.local import LocalStorage
 
 
-async def test_injects_session_and_storage(db_engine: AsyncEngine, tmp_path: Path) -> None:
+async def test_injects_session_storage_and_fetcher(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
     storage = LocalStorage(root=tmp_path)
     factory = create_session_factory(db_engine)
-    mw = DependenciesMiddleware(session_factory=factory, storage=storage)
+    fetcher = RemoteFileFetcher()
+    mw = DependenciesMiddleware(
+        session_factory=factory, storage=storage, fetcher=fetcher
+    )
 
     captured: dict[str, Any] = {}
 
     async def handler(event: Any, data: dict[str, Any]) -> str:
         captured["session"] = data.get("session")
         captured["storage"] = data.get("storage")
+        captured["fetcher"] = data.get("fetcher")
         return "ok"
 
     result = await mw(handler, SimpleNamespace(), {})
     assert result == "ok"
     assert captured["storage"] is storage
+    assert captured["fetcher"] is fetcher
     assert captured["session"] is not None
 
 
@@ -54,7 +62,11 @@ async def test_commits_on_success(db_engine: AsyncEngine, tmp_path: Path) -> Non
             await rollback_spy()
 
     fake_factory = MagicMock(return_value=FakeSession())
-    mw = DependenciesMiddleware(session_factory=fake_factory, storage=storage)  # type: ignore[arg-type]
+    mw = DependenciesMiddleware(  # type: ignore[arg-type]
+        session_factory=fake_factory,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
+    )
 
     async def handler(event: Any, data: dict[str, Any]) -> str:
         return "ok"
@@ -84,7 +96,11 @@ async def test_rolls_back_on_exception(tmp_path: Path) -> None:
             await rollback_spy()
 
     fake_factory = MagicMock(return_value=FakeSession())
-    mw = DependenciesMiddleware(session_factory=fake_factory, storage=storage)  # type: ignore[arg-type]
+    mw = DependenciesMiddleware(  # type: ignore[arg-type]
+        session_factory=fake_factory,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
+    )
 
     async def handler(event: Any, data: dict[str, Any]) -> None:
         raise RuntimeError("boom")
@@ -114,7 +130,11 @@ async def test_rolls_back_when_commit_itself_fails(tmp_path: Path) -> None:
             await rollback_spy()
 
     fake_factory = MagicMock(return_value=FakeSession())
-    mw = DependenciesMiddleware(session_factory=fake_factory, storage=storage)  # type: ignore[arg-type]
+    mw = DependenciesMiddleware(  # type: ignore[arg-type]
+        session_factory=fake_factory,
+        storage=storage,
+        fetcher=RemoteFileFetcher(),
+    )
 
     async def handler(event: Any, data: dict[str, Any]) -> str:
         return "ok"

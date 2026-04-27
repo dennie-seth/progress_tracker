@@ -1,0 +1,91 @@
+# Production deployment on the VDS — bot-app, telegram-bot-api, and Postgres
+# all on one host, sharing the bot-api data directory so the bot reads source
+# files directly off disk (`BOT_API_LOCAL_FILES=true`). No SOCKS, no Basic
+# Auth — bot-app reaches bot-api over the internal `telegram_bot` network.
+#
+# Bring up:   docker compose -f docker-compose.vds.yml up -d --build
+# Tail logs:  docker compose -f docker-compose.vds.yml logs -f bot-app
+#
+# Prerequisite: the operator builds the `telegram-bot-api-local` image once
+# from the upstream tdlib/telegram-bot-api source. This file does not own
+# that build.
+
+services:
+  telegram-bot-api:
+    image: telegram-bot-api-local
+    container_name: telegram-bot-api
+    restart: unless-stopped
+    stop_grace_period: 40s
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+    volumes:
+      - ./telegram-bot-api-data:/var/lib/telegram-bot-api
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    networks:
+      - telegram_bot
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: progress_tracker
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d progress_tracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - telegram_bot
+
+  bot-app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/progress_tracker
+      MEDIA_DIR: /data/media
+      # bot-app reaches the bot-api server over the shared docker network.
+      BOT_API_URL: http://telegram-bot-api:8081
+      # Local-files mode: bot-app reads source videos directly from the
+      # bot-api data directory (mounted read-only below) instead of
+      # downloading them over HTTP.
+      BOT_API_LOCAL_FILES: "true"
+      BOT_API_LOCAL_ROOT: /var/lib/telegram-bot-api
+      # SOCKS proxy + HTTP Basic Auth are not needed in this deployment;
+      # leave them unset. (.env may still define BOT_TOKEN, etc.)
+      SOCKS_PROXY_URL: ""
+      BOT_API_USERNAME: ""
+      BOT_API_PASSWORD: ""
+    command: sh -c "alembic upgrade head && exec python -m progress_tracker"
+    depends_on:
+      db:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started
+    volumes:
+      - media_data:/data/media
+      # Same host directory bot-api writes to, mounted read-only here. The
+      # absolute paths bot-api returns from `getFile` (e.g. /var/lib/...)
+      # are valid inside this container thanks to this mount.
+      - ./telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+    networks:
+      - telegram_bot
+
+volumes:
+  db_data:
+  media_data:
+
+networks:
+  telegram_bot:

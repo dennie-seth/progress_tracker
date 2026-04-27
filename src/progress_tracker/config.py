@@ -59,6 +59,27 @@ class Settings(BaseSettings):
         description="HTTP Basic Auth password for the Bot API server. Secret.",
     )
 
+    # ---- VDS co-location: read source files directly off disk ----
+    # When the bot-app and telegram-bot-api server share a filesystem (the
+    # production deployment), `BOT_API_LOCAL_FILES=true` switches the file
+    # fetcher from "download via HTTPS" to "copy from the path bot-api
+    # returns." Off (the default) keeps the dev-from-home flow over SOCKS.
+    bot_api_local_files: bool = Field(
+        default=False,
+        description=(
+            "Read source files directly from disk (set true ONLY when "
+            "bot-app and telegram-bot-api share a filesystem)."
+        ),
+    )
+    bot_api_local_root: str = Field(
+        default="/var/lib/telegram-bot-api",
+        description=(
+            "Trusted root for paths returned by getFile in --local mode. "
+            "Validation requires the returned path sits under "
+            "<root>/<bot_token>/."
+        ),
+    )
+
 
 def load_settings() -> Settings:
     """Instantiate Settings. Separated so tests can monkeypatch easily."""

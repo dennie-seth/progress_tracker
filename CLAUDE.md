@@ -4,10 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Early-alpha. Milestones 1, 2, 2.5 and 3 are implemented. Roadmap at
-`C:\Users\denni\.claude\plans\enumerated-twirling-glacier.md`; current
-substep plan at `C:\Users\denni\.claude\plans\milestone-2.5-bot-api-server.md`
-(milestone 2.5 is shipped, kept for reference).
+Early-alpha. Milestones 1, 2, 2.5, 3, 5 and 6 are implemented. Roadmap at
+`C:\Users\denni\.claude\plans\enumerated-twirling-glacier.md`; the appendix
+of that file holds the most recent refactor plan (VDS co-location).
 
 What works right now:
 - `/start` and `/help` reply with a welcome message.
@@ -16,10 +15,14 @@ What works right now:
 - Optional routing through a remote `telegram-bot-api` server via SOCKS5
   (controlled by `BOT_API_URL` + `SOCKS_PROXY_URL`).
 - Video upload pipeline: user sends a video with hashtags in the caption,
-  bot downloads it (through the SOCKS tunnel if configured), saves to
-  `LocalStorage`, persists `User`/`Tag`/`Video`/`VideoTag` rows, and replies
-  with a saved-confirmation that includes how many prior clips share the
-  same tags.
+  bot ingests it via the configured `FileFetcher` (HTTP download for
+  dev-from-home, direct disk read for the co-located VDS deploy), saves
+  into `LocalStorage`, persists `User`/`Tag`/`Video`/`VideoTag` rows, and
+  replies with a saved-confirmation that includes how many prior clips
+  share the same tags.
+- Compile FSM + ffmpeg compiler: `/compile` walks the user through tag /
+  range / duration / overlay choices and produces an iOS-Photos-compatible
+  `.mov` reel.
 
 Not yet built: compile FSM (milestone 5), ffmpeg compiler (milestone 6),
 history/library commands (milestone 4 partials), tests/CI workflow file
@@ -110,6 +113,18 @@ duration, date range, and whether to overlay the upload date on each clip.
   session. When switching a bot from cloud api.telegram.org to a custom server,
   the operator must run `curl "https://api.telegram.org/bot<TOKEN>/logOut"`
   once before the first connection.
+- **Two file-fetcher modes for ingest** (`bot_api/fetcher.py`).
+  `RemoteFileFetcher` is the dev-from-home path: `bot.get_file` →
+  `normalize_remote_file_path` → `bot.download_file` over HTTPS, then
+  `DeleteFile` to ask the remote bot-api to drop its copy. `LocalFileFetcher`
+  is the co-located VDS path: `bot.get_file` → `validate_local_file_path` →
+  `shutil.copyfile` from a bind-mounted bot-api data dir; cleanup is a no-op
+  because per user direction source files persist on the VDS indefinitely.
+  Selection happens at startup via `BOT_API_LOCAL_FILES`. Two compose files
+  reflect the split: `docker-compose.yml` for dev-from-home,
+  `docker-compose.vds.yml` for the VDS deploy (bot-app + telegram-bot-api +
+  postgres on a shared docker network). Don't drop the SOCKS+BasicAuth code
+  paths — dev still uses them.
 - **Clip trimming rule**: if `clip.duration <= target/N`, keep at full speed;
   otherwise speed up via `setpts=PTS/speed` + `atempo` (chain `atempo` filters
   when speed > 2.0). Never truncate — the user chose "speed up" over "crop".

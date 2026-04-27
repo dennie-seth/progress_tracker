@@ -6,6 +6,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from progress_tracker.bot_api.fetcher import FileFetcher
 from progress_tracker.services.ingest import ingest_video
 from progress_tracker.storage.base import Storage
 
@@ -33,6 +34,7 @@ async def on_video(
     message: Message,
     session: AsyncSession,
     storage: Storage,
+    fetcher: FileFetcher,
 ) -> None:
     """Handle an incoming video message."""
     if not message.caption or "#" not in message.caption:
@@ -44,6 +46,7 @@ async def on_video(
         message=message,
         session=session,
         storage=storage,
+        fetcher=fetcher,
     )
 
     if result is None:

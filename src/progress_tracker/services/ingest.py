@@ -8,12 +8,10 @@ from decimal import Decimal
 
 import structlog
 from aiogram import Bot
-from aiogram.exceptions import TelegramNotFound
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from progress_tracker.bot_api.files import normalize_remote_file_path
-from progress_tracker.bot_api.methods import DeleteFile
+from progress_tracker.bot_api.fetcher import FileFetcher
 from progress_tracker.db.models import Video
 from progress_tracker.db.repos import TagRepo, UserRepo, VideoRepo
 from progress_tracker.storage.base import Storage
@@ -37,6 +35,7 @@ async def ingest_video(
     message: Message,
     session: AsyncSession,
     storage: Storage,
+    fetcher: FileFetcher,
 ) -> IngestResult | None:
     """Persist an uploaded video and return its IngestResult.
 
@@ -45,7 +44,9 @@ async def ingest_video(
 
     Caller is responsible for `session.commit()` after this returns. The
     ingest service stays transaction-agnostic so it can be wrapped by a
-    middleware later.
+    middleware later. The `fetcher` strategy decides how the bytes get from
+    Telegram into storage (HTTP vs direct disk read) and what cleanup, if
+    any, happens on the bot-api side afterwards — see `bot_api.fetcher`.
     """
     if message.video is None:
         return None
@@ -69,21 +70,7 @@ async def ingest_video(
     target = await storage.write_path(storage_key)
 
     try:
-        # `bot.download(message.video, ...)` builds the URL from `getFile.file_path`
-        # verbatim. When the remote bot-api runs with `--local`, that field is an
-        # absolute filesystem path on the *server's* host — useless to us over
-        # HTTP. Resolve `getFile` ourselves, normalize the path, then download via
-        # the relative form (which the server still serves on `/file/bot<token>/...`).
-        tg_file = await bot.get_file(message.video.file_id)
-        relative_path = normalize_remote_file_path(tg_file.file_path or "", bot.token)
-        _log.info(
-            "downloading video",
-            file_id=message.video.file_id,
-            raw_file_path=tg_file.file_path,
-            relative_path=relative_path,
-            file_size=getattr(tg_file, "file_size", None),
-        )
-        await bot.download_file(relative_path, destination=target)
+        await fetcher.fetch(bot=bot, message=message, target=target)
         await storage.commit(storage_key)
 
         tg_video = message.video
@@ -108,27 +95,9 @@ async def ingest_video(
         await storage.delete(storage_key)
         raise
 
-    # Cleanup-policy: ask the bot-api server to drop its own copy of the file
-    # now that we own the bytes. Best-effort — the upload already succeeded
-    # and the user has been told; a delete failure is a disk-usage concern on
-    # the server, not a correctness problem here. `deleteFile` is a local-
-    # Bot-API-server-only method (not in the cloud API), so aiogram doesn't
-    # ship a convenience wrapper — we invoke via the explicit method form.
-    try:
-        await bot(DeleteFile(file_id=message.video.file_id))
-    except TelegramNotFound:
-        # Some older `telegram-bot-api` builds don't expose `deleteFile`.
-        # That's not an alarm — the upload succeeded; we just can't reclaim
-        # the server's disk. Log at debug so verbose runs can see it.
-        _log.debug(
-            "bot-api has no deleteFile method; cleanup unavailable",
-            file_id=message.video.file_id,
-        )
-    except Exception:
-        _log.warning(
-            "delete_file failed; bot-api copy may persist",
-            file_id=message.video.file_id,
-            exc_info=True,
-        )
+    # Best-effort post-ingest cleanup. RemoteFileFetcher asks bot-api to drop
+    # its redundant copy via deleteFile; LocalFileFetcher is a no-op (files
+    # persist on the shared VDS disk for indefinite reuse).
+    await fetcher.cleanup(bot=bot, message=message)
 
     return IngestResult(video=video, tag_names=tag_names, prior_count=prior_count)
