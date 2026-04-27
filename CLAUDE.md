@@ -46,11 +46,16 @@ milestone 4 if we need fps or accurate duration.
 
 All commands assume `cwd = F:\PetProjects\progress_tracker`.
 
-**Run the full stack (recommended):**
+**Production stack (default — what cron CD runs on the VDS):**
 ```powershell
-docker compose up --build       # builds bot image, starts Postgres + bot
+docker compose up -d --build    # bot-app + telegram-bot-api + Postgres
 docker compose down             # stop
-docker compose logs -f bot      # tail bot logs
+docker compose logs -f bot-app  # tail bot logs
+```
+
+**Local dev stack (cloud Telegram, no bot-api server):**
+```powershell
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 **Run the bot natively (milestone 1 only — no DB needed yet):**
@@ -61,20 +66,21 @@ pip install -e ".[dev]"
 python -m progress_tracker      # reads .env, starts polling
 ```
 
-**Lint / type-check / test — inside the bot container** (image includes `[dev]` extras):
+**Lint / type-check / test — inside the dev `bot` container** (image includes `[dev]` extras).
+Tests run against the dev compose so they don't drag the bot-api server up:
 ```powershell
 # Bind-mount src/ and tests/ so edits on host reflect without a rebuild.
 # The bot image uses an editable install, so the mounted src/ becomes the
 # live package.
-docker compose run --rm `
+docker compose -f docker-compose.dev.yml run --rm `
     -v "${PWD}/src:/app/src" `
     -v "${PWD}/tests:/app/tests" `
     bot pytest
 
-docker compose run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest tests/test_config.py
-docker compose run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest -k speedup
-docker compose run --rm -v "${PWD}/src:/app/src" bot ruff check .
-docker compose run --rm -v "${PWD}/src:/app/src" bot mypy src/
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest tests/test_config.py
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" -v "${PWD}/tests:/app/tests" bot pytest -k speedup
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot ruff check .
+docker compose -f docker-compose.dev.yml run --rm -v "${PWD}/src:/app/src" bot mypy src/
 ```
 
 The `tests/conftest.py` has an autouse fixture that isolates each test from

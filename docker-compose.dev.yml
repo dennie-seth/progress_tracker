@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: progress_tracker
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d progress_tracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the default in .env so the bot reaches the compose-network db.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/progress_tracker
+      MEDIA_DIR: /data/media
+    # Apply any pending migrations before starting the bot. `alembic upgrade
+    # head` is idempotent, so restarts are safe. The `exec` makes Python
+    # replace sh as PID 1 after migrations finish, so SIGTERM from
+    # `docker compose stop` reaches our signal handler instead of being
+    # swallowed by the shell.
+    command: sh -c "alembic upgrade head && exec python -m progress_tracker"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - media_data:/data/media
+
+volumes:
+  db_data:
+  media_data:

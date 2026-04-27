@@ -21,35 +21,38 @@ MIT — see [LICENSE](LICENSE).
 - ffmpeg (system binary) for video compilation
 - Docker Compose for one-command self-host
 
-## Quick start (Docker)
+## Deploy on a VDS (production, default)
 
-```bash
-cp .env.example .env            # set BOT_TOKEN from @BotFather
-docker compose up --build
-```
-
-Then DM your bot `/start`.
-
-## Deploy on a VDS (production)
-
-For a production deployment that co-locates the bot with a self-hosted
-`telegram-bot-api` server (so the bot reads uploaded videos directly off
-shared disk instead of downloading them over HTTP), use the dedicated
-compose file:
+The root `docker-compose.yml` is the **production** stack: bot-app +
+self-hosted `telegram-bot-api` + Postgres on a single host, sharing the
+bot-api data directory so the bot reads uploaded videos directly off disk.
 
 ```bash
 # Pre-build the bot-api image once from the upstream source:
 docker build -t telegram-bot-api-local /path/to/telegram-bot-api
 
-# Bring up bot-app + telegram-bot-api + postgres on the VDS:
+# Bring up the full stack:
 cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH
-docker compose -f docker-compose.vds.yml up -d --build
+docker compose up -d --build
 ```
 
-That compose file sets `BOT_API_LOCAL_FILES=true` so the bot uses
-`LocalFileFetcher` (direct disk read, no `DeleteFile` cleanup) and bind-
-mounts `./telegram-bot-api-data` read-only into the bot container. SOCKS
-and HTTP Basic Auth aren't needed when both services run on the same host.
+That sets `BOT_API_LOCAL_FILES=true` so the bot uses `LocalFileFetcher`
+(direct disk read, no `DeleteFile` cleanup) and bind-mounts
+`./telegram-bot-api-data` read-only into the bot container. SOCKS and
+HTTP Basic Auth aren't needed when both services run on the same host.
+
+The "git clone → cd → docker compose up" shape is intentional so a dumb
+cron job can do `git pull && docker compose up -d --build` on the VDS.
+
+## Local dev (cloud Telegram, no bot-api server)
+
+```bash
+cp .env.example .env            # set BOT_TOKEN from @BotFather
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Then DM your bot `/start`. This stack is bot + Postgres only and uses the
+HTTPS download path through `RemoteFileFetcher`.
 
 ## Quick start (local, without Docker)
 
