@@ -26,6 +26,7 @@ htmlcov/
 
 # Project data
 media/
+telegram-bot-api-data/
 *.mp4
 !tests/fixtures/*.mp4
 *.mkv
