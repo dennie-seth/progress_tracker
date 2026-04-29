@@ -26,12 +26,14 @@ services:
     # Scope: only the two credentials tdlib actually needs. Avoid `env_file:
     # .env` here because that would leak BOT_TOKEN / DATABASE_URL / SOCKS
     # creds into the bot-api process — anything that compromises tdlib
-    # could read them out of /proc/1/environ. The `:?` form fails compose-
-    # up loudly if the var isn't set rather than silently passing an empty
-    # value to tdlib (which would refuse to start with a confusing error).
+    # could read them out of /proc/1/environ. Pass-through interpolation
+    # (no `:?`) matches the operator's existing setup; the bot-api server
+    # caches the api id/hash in its data dir after first launch and reuses
+    # them across restarts, so an empty value here doesn't necessarily
+    # break a long-lived deploy.
     environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?TELEGRAM_API_ID must be set in .env}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?TELEGRAM_API_HASH must be set in .env}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
     volumes:
       - ./telegram-bot-api-data:/var/lib/telegram-bot-api
     healthcheck:

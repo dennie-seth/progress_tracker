@@ -35,12 +35,19 @@ mkdir -p telegram-bot-api-data
 sudo chown -R 1000:1000 telegram-bot-api-data
 
 # 2. Create .env once on the VDS (gitignored — `git pull` won't touch it):
-cp .env.example .env            # set BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH,
-                                # and POSTGRES_PASSWORD (compose refuses to start
-                                # without a value for that one)
+cp .env.example .env            # set BOT_TOKEN and POSTGRES_PASSWORD;
+                                # the latter is required (compose refuses to
+                                # start without it).
 
 # 3. Build everything and bring up the stack. The first build compiles
 #    tdlib + telegram-bot-api from source (~10-15 min); rebuilds reuse cache.
+#
+# Note on TELEGRAM_API_ID / TELEGRAM_API_HASH: telegram-bot-api needs them
+# at first launch to register with Telegram. After that they're cached in
+# `telegram-bot-api-data/` and not required on subsequent restarts. If
+# you're deploying fresh, export them in the shell that runs compose
+# (compose interpolates `${TELEGRAM_API_ID}` / `${TELEGRAM_API_HASH}` into
+# the bot-api container) — get them from https://my.telegram.org/apps.
 docker compose up -d --build
 ```
 
