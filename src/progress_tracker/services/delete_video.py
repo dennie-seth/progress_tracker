@@ -54,6 +54,10 @@ async def delete_video(
     if storage_key is None:
         return DeleteResult(deleted=False, storage_key=None)
 
+    # Mark this user dirty so DependenciesMiddleware re-dumps their manifest
+    # after commit. See `services/persistence.py`.
+    session.info.setdefault("dirty_users", set()).add(user_id)
+
     try:
         await storage.delete(storage_key)
     except Exception:

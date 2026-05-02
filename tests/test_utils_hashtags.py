@@ -29,7 +29,9 @@ def test_hashtag_in_middle_of_text() -> None:
 
 def test_lowercases_tag_name() -> None:
     assert parse_hashtags("#Squat") == ["squat"]
-    assert parse_hashtags("#PR-Day") == ["pr-day"]
+    # Dashes are slugified to underscores so the tag's canonical form contains
+    # only `\w` characters — keeps `-` as a UUID-only marker in storage filenames.
+    assert parse_hashtags("#PR-Day") == ["pr_day"]
 
 
 def test_dedupes_repeated_tags() -> None:
@@ -40,8 +42,17 @@ def test_preserves_order_of_first_appearance() -> None:
     assert parse_hashtags("#squat #pr #squat #deadlift") == ["squat", "pr", "deadlift"]
 
 
-def test_hyphenated_tags_kept_intact() -> None:
-    assert parse_hashtags("#bachata-basic") == ["bachata-basic"]
+def test_hyphens_become_underscores() -> None:
+    """Tag names are stored / displayed with underscores; this keeps `-` as a
+    marker exclusive to UUIDs in storage filenames so a human eyeballing
+    `42/bachata_basic.lift.abc-123-...mp4` never has to guess which dashes
+    belong to which part."""
+    assert parse_hashtags("#bachata-basic") == ["bachata_basic"]
+
+
+def test_dedupes_dash_and_underscore_variants_to_same_canonical_form() -> None:
+    """Both `#bachata-basic` and `#bachata_basic` should be one tag."""
+    assert parse_hashtags("#bachata-basic #bachata_basic") == ["bachata_basic"]
 
 
 def test_underscores_kept() -> None:

@@ -23,12 +23,30 @@ class UserRepo:
         self._s = session
 
     async def upsert(
-        self, *, user_id: int, username: str | None, first_name: str | None
+        self,
+        *,
+        user_id: int,
+        username: str | None,
+        first_name: str | None,
+        created_at: datetime | None = None,
     ) -> User:
-        """Insert or update a user; return the row in either case."""
+        """Insert or update a user; return the row in either case.
+
+        `created_at` is only used on insert (recovery passes the original
+        timestamp from the manifest so the restored row matches what it
+        was pre-wipe). On conflict we leave the existing `created_at`
+        untouched.
+        """
+        values: dict[str, object] = {
+            "id": user_id,
+            "username": username,
+            "first_name": first_name,
+        }
+        if created_at is not None:
+            values["created_at"] = created_at
         stmt = (
             insert(User)
-            .values(id=user_id, username=username, first_name=first_name)
+            .values(**values)
             .on_conflict_do_update(
                 index_elements=[User.id],
                 set_={"username": username, "first_name": first_name},
@@ -43,11 +61,29 @@ class TagRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def upsert_many(self, user_id: int, names: Sequence[str]) -> list[Tag]:
-        """Idempotently ensure tags exist for the given user; return all matching rows."""
+    async def upsert_many(
+        self,
+        user_id: int,
+        names: Sequence[str],
+        *,
+        created_at_by_name: dict[str, datetime] | None = None,
+    ) -> list[Tag]:
+        """Idempotently ensure tags exist for the given user; return all matching rows.
+
+        ``created_at_by_name`` is consulted only for tags that don't already
+        exist — used by recovery to preserve the original tag-creation time
+        from a manifest. Names not in the map fall back to
+        `server_default=func.now()`.
+        """
         if not names:
             return []
-        rows = [{"user_id": user_id, "name": n} for n in names]
+        cab = created_at_by_name or {}
+        rows: list[dict[str, object]] = []
+        for n in names:
+            row: dict[str, object] = {"user_id": user_id, "name": n}
+            if n in cab:
+                row["created_at"] = cab[n]
+            rows.append(row)
         await self._s.execute(
             insert(Tag).values(rows).on_conflict_do_nothing(
                 index_elements=[Tag.user_id, Tag.name]
@@ -91,8 +127,9 @@ class VideoRepo:
         fps: Decimal | None = None,
         caption: str | None = None,
         tag_ids: Sequence[int] = (),
+        created_at: datetime | None = None,
     ) -> Video:
-        video = Video(
+        kwargs: dict[str, object] = dict(
             id=id,
             user_id=user_id,
             telegram_file_id=telegram_file_id,
@@ -103,6 +140,9 @@ class VideoRepo:
             fps=fps,
             caption=caption,
         )
+        if created_at is not None:
+            kwargs["created_at"] = created_at
+        video = Video(**kwargs)
         self._s.add(video)
         await self._s.flush()
         if tag_ids:

@@ -39,6 +39,15 @@ What works right now:
 - `/delete` FSM: pick a tag, browse the 20 most-recent matching clips, two-
   tap-delete to remove the row + on-disk file. Hard delete; existing
   compilations that referenced the source clip survive untouched.
+- Persistence + recovery (`services/persistence.py`). The DB is in a per-
+  host docker volume; videos sit in a bind mount that survives a host
+  swap. A per-user JSON manifest (`<user_id>/manifest.json`) is dumped
+  atomically after every successful ingest/delete and on graceful shutdown.
+  Storage filenames encode their tags
+  (`<user>/<sorted_tag_slugs_dot_joined>.<uuid>.mp4`) so a manifest-less
+  recovery still rebuilds tags + video↔tag links from disk. At startup,
+  if `videos` is empty, the bot scans `MEDIA_DIR` and restores everything
+  inside one transaction.
 
 Not yet built: history/library commands (milestone 4 partials), tests/CI
 workflow file (milestone 8). ffprobe isn't wired on ingest — for now we

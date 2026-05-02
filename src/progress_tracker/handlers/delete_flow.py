@@ -28,6 +28,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -134,20 +135,38 @@ async def _send_listing(
     chat_id: int,
     videos: Sequence[Video],
     tag_name: str,
+    storage: Storage,
 ) -> None:
     """Send each clip as a video message with a single delete button.
 
-    We re-send via Telegram's cached `file_id` (no upload) so this is one
-    HTTP call per clip; chatting up to 20 messages on a `/delete` is fine
-    on a private bot.
+    Happy path: re-send via Telegram's cached `file_id` (no upload, one HTTP
+    call per clip). Fallback: when `telegram_file_id` is empty (post-recovery
+    rows have a placeholder, since the cached file_id was lost with the DB),
+    upload from the local copy via `FSInputFile`. Slower but keeps the
+    delete UI working for recovered videos.
     """
     for v in videos:
-        await bot.send_video(
-            chat_id=chat_id,
-            video=v.telegram_file_id,
-            caption=_format_caption(v, tag_name),
-            reply_markup=_delete_keyboard(v.id),
-        )
+        caption = _format_caption(v, tag_name)
+        keyboard = _delete_keyboard(v.id)
+        if v.telegram_file_id:
+            await bot.send_video(
+                chat_id=chat_id,
+                video=v.telegram_file_id,
+                caption=caption,
+                reply_markup=keyboard,
+            )
+        else:
+            # Storage.open is an async context manager because S3-backed
+            # opens stream into a tempfile that's cleaned up on exit. The
+            # send_video call must happen inside the with-block so the
+            # tempfile survives until aiogram has streamed it to Telegram.
+            async with storage.open(v.storage_key) as path:
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=FSInputFile(path),
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
 
 
 # ---------- handlers ----------
@@ -175,6 +194,7 @@ async def on_delete(
             message.bot,
             chat_id=message.chat.id,
             session=session,
+            storage=storage,
             user_id=user_id,
             tag=only,
             answer=message.answer,
@@ -189,7 +209,10 @@ async def on_delete(
 
 
 async def on_tag_selected(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    storage: Storage,
 ) -> None:
     tag_id = int(call.data.split(":", 1)[1])
     tag = await TagRepo(session).get(tag_id)
@@ -202,6 +225,7 @@ async def on_tag_selected(
         call.bot,
         chat_id=msg.chat.id,
         session=session,
+        storage=storage,
         user_id=call.from_user.id,
         tag=tag,
         answer=msg.answer,
@@ -215,6 +239,7 @@ async def _open_listing(
     *,
     chat_id: int,
     session: AsyncSession,
+    storage: Storage,
     user_id: int,
     tag: Tag,
     answer,
@@ -237,7 +262,11 @@ async def _open_listing(
         f"{len(newest_first)} clip(s) tagged #{tag.name}."
     )
     await _send_listing(
-        bot, chat_id=chat_id, videos=newest_first, tag_name=tag.name
+        bot,
+        chat_id=chat_id,
+        videos=newest_first,
+        tag_name=tag.name,
+        storage=storage,
     )
     await state.set_state(DeleteStates.browsing)
 

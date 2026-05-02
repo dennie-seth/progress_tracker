@@ -18,12 +18,16 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import structlog
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from progress_tracker.bot_api.fetcher import FileFetcher
+from progress_tracker.services.persistence import dump_user_manifest
 from progress_tracker.storage.base import Storage
+
+_log = structlog.get_logger("progress_tracker.middleware")
 
 
 class DependenciesMiddleware(BaseMiddleware):
@@ -62,10 +66,31 @@ class DependenciesMiddleware(BaseMiddleware):
             try:
                 result = await handler(event, data)
                 await session.commit()
-                return result
             except Exception:
                 # Rollback on either handler failure OR commit failure — the
                 # latter can happen on deadlock / connection loss / deferred
                 # constraint, and leaves the session unusable otherwise.
                 await session.rollback()
                 raise
+            else:
+                # Post-commit only: dump manifests for any users whose state
+                # this request mutated. Services mark dirty users via
+                # `session.info["dirty_users"]`. Fresh session for the dump so
+                # the manifest reflects the just-committed state, never an
+                # uncommitted one. Per-user failures are logged but never
+                # bubble up — the user-facing ingest/delete already
+                # succeeded.
+                dirty_users: set[int] = session.info.get("dirty_users", set())
+                for user_id in dirty_users:
+                    try:
+                        async with self._factory() as fresh:
+                            await dump_user_manifest(
+                                fresh, self._storage, user_id=user_id
+                            )
+                    except Exception:
+                        _log.warning(
+                            "manifest dump failed",
+                            user_id=user_id,
+                            exc_info=True,
+                        )
+            return result

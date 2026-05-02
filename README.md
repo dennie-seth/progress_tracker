@@ -60,6 +60,28 @@ The "git clone → cd → docker compose up" shape is intentional so a dumb
 cron job can do `git pull && docker compose up -d --build` on the VDS.
 `.env` lives outside git, so cron pulls never overwrite secrets.
 
+### Disk-based recovery (no DB required)
+
+Even without a Postgres backup, the bot survives a host swap as long as
+the `media_data` volume comes along:
+
+- Every successful upload and delete dumps a per-user JSON manifest to
+  `<MEDIA_DIR>/<user_id>/manifest.json` (atomic write — SIGKILL leaves
+  the previous valid file intact). A second sweep runs on graceful
+  shutdown.
+- Stored video filenames encode their tags
+  (`<user>/<tag1>.<tag2>.<uuid>.mp4`) so even a missing/corrupt manifest
+  still recovers tags + video↔tag links from the on-disk filenames.
+- At startup, if the `videos` table is empty, the bot reads manifests
+  and rebuilds the DB inside one transaction. Recovery is one-shot —
+  once any video row exists, it's a no-op.
+
+Filename-only recovery degrades a few fields gracefully: `created_at`
+falls back to file mtime, `caption` is lost, and `telegram_file_id` is
+empty (the `/delete` listing then re-uploads the local copy via
+`FSInputFile` instead of the cached file_id). Re-uploading any clip
+restores its rich metadata from the next manifest dump.
+
 ### Backups
 
 The Postgres data lives in the named volume `db_data` and survives
@@ -80,7 +102,8 @@ docker compose exec -T db psql -U postgres -d progress_tracker \
 
 Compiled videos in the `media_data` volume and uploaded source clips in
 `telegram-bot-api-data/` are intentionally not part of the DB backup —
-they're recoverable from the chats that produced them.
+the source clips are recoverable from the chats that produced them, and
+the manifest-based recovery above handles the metadata.
 
 ## Local dev (cloud Telegram, no bot-api server)
 

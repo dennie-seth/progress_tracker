@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from progress_tracker.bot_api.fetcher import FileFetcher
 from progress_tracker.db.models import Video
 from progress_tracker.db.repos import TagRepo, UserRepo, VideoRepo
+from progress_tracker.services.persistence import build_storage_key
 from progress_tracker.storage.base import Storage
 from progress_tracker.utils.hashtags import parse_hashtags
 
@@ -66,7 +67,9 @@ async def ingest_video(
     tag_ids = [t.id for t in tags]
 
     video_id = uuid.uuid4()
-    storage_key = f"{user.id}/{video_id}.mp4"
+    # Encode tag info into the filename so a manifest-less recovery still
+    # rebuilds tags + video↔tag links from the on-disk files alone.
+    storage_key = build_storage_key(user.id, tag_names, video_id)
     target = await storage.write_path(storage_key)
 
     try:
@@ -99,5 +102,9 @@ async def ingest_video(
     # its redundant copy via deleteFile; LocalFileFetcher is a no-op (files
     # persist on the shared VDS disk for indefinite reuse).
     await fetcher.cleanup(bot=bot, message=message)
+
+    # Mark this user dirty so DependenciesMiddleware re-dumps their manifest
+    # after the surrounding transaction commits. See `services/persistence.py`.
+    session.info.setdefault("dirty_users", set()).add(user.id)
 
     return IngestResult(video=video, tag_names=tag_names, prior_count=prior_count)

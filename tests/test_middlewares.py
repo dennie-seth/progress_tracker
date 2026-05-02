@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -43,13 +43,20 @@ async def test_injects_session_storage_and_fetcher(
 
 async def test_commits_on_success(db_engine: AsyncEngine, tmp_path: Path) -> None:
     storage = LocalStorage(root=tmp_path)
-    factory = create_session_factory(db_engine)
+    # `db_engine` is requested only to share the test-scoped event loop; the
+    # actual factory is the FakeSession-returning one below.
+    _ = db_engine
 
     commit_spy = AsyncMock()
     rollback_spy = AsyncMock()
 
     class FakeSession:
-        async def __aenter__(self) -> "FakeSession":
+        # ClassVar-form: dict-typed sentinel shared across instances; the
+        # middleware only reads `.get("dirty_users", set())` so a single empty
+        # dict is fine for these unit tests.
+        info: ClassVar[dict[str, Any]] = {}
+
+        async def __aenter__(self) -> FakeSession:
             return self
 
         async def __aexit__(self, *exc: Any) -> None:
@@ -83,7 +90,12 @@ async def test_rolls_back_on_exception(tmp_path: Path) -> None:
     rollback_spy = AsyncMock()
 
     class FakeSession:
-        async def __aenter__(self) -> "FakeSession":
+        # ClassVar-form: dict-typed sentinel shared across instances; the
+        # middleware only reads `.get("dirty_users", set())` so a single empty
+        # dict is fine for these unit tests.
+        info: ClassVar[dict[str, Any]] = {}
+
+        async def __aenter__(self) -> FakeSession:
             return self
 
         async def __aexit__(self, *exc: Any) -> None:
@@ -117,7 +129,12 @@ async def test_rolls_back_when_commit_itself_fails(tmp_path: Path) -> None:
     rollback_spy = AsyncMock()
 
     class FakeSession:
-        async def __aenter__(self) -> "FakeSession":
+        # ClassVar-form: dict-typed sentinel shared across instances; the
+        # middleware only reads `.get("dirty_users", set())` so a single empty
+        # dict is fine for these unit tests.
+        info: ClassVar[dict[str, Any]] = {}
+
+        async def __aenter__(self) -> FakeSession:
             return self
 
         async def __aexit__(self, *exc: Any) -> None:
@@ -142,3 +159,53 @@ async def test_rolls_back_when_commit_itself_fails(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="commit-failed"):
         await mw(handler, SimpleNamespace(), {})
     rollback_spy.assert_awaited_once()
+
+
+async def test_dumps_manifest_after_successful_commit(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """Services mark `session.info["dirty_users"]`; the middleware dumps
+    each marked user's manifest in a fresh session after commit succeeds."""
+    from progress_tracker.db.repos import UserRepo
+
+    storage = LocalStorage(root=tmp_path)
+    factory = create_session_factory(db_engine)
+    mw = DependenciesMiddleware(
+        session_factory=factory, storage=storage, fetcher=RemoteFileFetcher()
+    )
+
+    async def handler(event: Any, data: dict[str, Any]) -> str:
+        s = data["session"]
+        await UserRepo(s).upsert(user_id=42, username="a", first_name="A")
+        s.info.setdefault("dirty_users", set()).add(42)
+        return "ok"
+
+    await mw(handler, SimpleNamespace(), {})
+
+    manifest_path = tmp_path / "42" / "manifest.json"
+    assert manifest_path.exists()
+
+
+async def test_does_not_dump_manifest_after_rollback(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """When the handler raises (rollback path), the manifest must NOT be
+    written — otherwise a phantom-state file would haunt the next recovery."""
+    from progress_tracker.db.repos import UserRepo
+
+    storage = LocalStorage(root=tmp_path)
+    factory = create_session_factory(db_engine)
+    mw = DependenciesMiddleware(
+        session_factory=factory, storage=storage, fetcher=RemoteFileFetcher()
+    )
+
+    async def handler(event: Any, data: dict[str, Any]) -> None:
+        s = data["session"]
+        await UserRepo(s).upsert(user_id=43, username="b", first_name="B")
+        s.info.setdefault("dirty_users", set()).add(43)
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await mw(handler, SimpleNamespace(), {})
+
+    assert not (tmp_path / "43" / "manifest.json").exists()

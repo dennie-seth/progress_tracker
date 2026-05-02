@@ -231,7 +231,7 @@ async def test_tag_selected_lists_videos_and_sets_browsing(
 
     cb = _callback(f"del_tag:{tag.id}", user_id=100)
     state = _state()
-    await on_tag_selected(cb, state=state, session=db_session)
+    await on_tag_selected(cb, state=state, session=db_session, storage=LocalStorage(root=tmp_path))
 
     state.update_data.assert_any_await(tag_id=tag.id, tag_name="squat")
     state.set_state.assert_awaited_with(DeleteStates.browsing)
@@ -240,7 +240,7 @@ async def test_tag_selected_lists_videos_and_sets_browsing(
 
 
 async def test_tag_selected_rejects_other_users_tag(
-    db_session: AsyncSession,
+    db_session: AsyncSession, tmp_path: Path
 ) -> None:
     await UserRepo(db_session).upsert(user_id=1, username="u1", first_name="U1")
     await UserRepo(db_session).upsert(user_id=2, username="u2", first_name="U2")
@@ -249,10 +249,45 @@ async def test_tag_selected_rejects_other_users_tag(
 
     cb = _callback(f"del_tag:{foreign.id}", user_id=2)
     state = _state()
-    await on_tag_selected(cb, state=state, session=db_session)
+    await on_tag_selected(cb, state=state, session=db_session, storage=LocalStorage(root=tmp_path))
     cb.answer.assert_awaited_once()
     # Should answer with an alert and NOT advance state.
     state.set_state.assert_not_awaited()
+
+
+async def test_recovered_video_uses_fsinputfile_fallback(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """A row recovered without a `telegram_file_id` (post-DB-loss) must
+    still be sendable in the delete listing — falls back to uploading the
+    on-disk copy via FSInputFile."""
+    from aiogram.types import FSInputFile
+
+    storage = LocalStorage(root=tmp_path)
+    await UserRepo(db_session).upsert(user_id=100, username="u", first_name="U")
+    [tag] = await TagRepo(db_session).upsert_many(user_id=100, names=["squat"])
+    vid = uuid.UUID("12345678-1234-1234-1234-123456789abc")
+    storage_key = f"100/squat.{vid}.mp4"
+    target = await storage.write_path(storage_key)
+    target.write_bytes(b"recovered-video-bytes")
+    await storage.commit(storage_key)
+    await VideoRepo(db_session).create(
+        id=vid,
+        user_id=100,
+        telegram_file_id="",  # post-recovery placeholder
+        storage_key=storage_key,
+        duration_sec=Decimal("1"),
+        tag_ids=[tag.id],
+    )
+    await db_session.commit()
+
+    cb = _callback(f"del_tag:{tag.id}", user_id=100)
+    state = _state()
+    await on_tag_selected(cb, state=state, session=db_session, storage=storage)
+
+    cb.bot.send_video.assert_awaited()
+    sent = cb.bot.send_video.await_args
+    assert isinstance(sent.kwargs["video"], FSInputFile)
 
 
 async def test_on_delete_button_edits_to_confirm_keyboard() -> None:
