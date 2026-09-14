@@ -17,6 +17,7 @@ from progress_tracker.bot_api.fetcher import (
 from progress_tracker.bot_api.session import CustomAiohttpSession
 from progress_tracker.config import Settings
 from progress_tracker.handlers import build_root_router
+from progress_tracker.middlewares.auth import AllowlistMiddleware
 from progress_tracker.middlewares.db import DependenciesMiddleware
 from progress_tracker.storage.base import Storage
 
@@ -81,6 +82,7 @@ def build_dispatcher(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     storage: Storage | None = None,
     fetcher: FileFetcher | None = None,
+    allowed_ids: frozenset[int] | None = None,
 ) -> Dispatcher:
     """Create the Dispatcher wired with all feature routers.
 
@@ -91,8 +93,14 @@ def build_dispatcher(
     `DependenciesMiddleware` is attached so handlers can request `session`,
     `storage`, and `fetcher` as kwargs. They're optional so unit tests can
     build a minimal dispatcher without a database.
+
+    `AllowlistMiddleware` goes on first, so an update that will be refused
+    never reaches the point where a database session is opened. `allowed_ids`
+    of `None` means no allowlist — see `middlewares.auth.resolve_allowed_ids`
+    for who decides that; the private-chat rule applies either way.
     """
     dp = Dispatcher(storage=MemoryStorage())
+    dp.update.outer_middleware(AllowlistMiddleware(allowed_ids))
     if session_factory is not None and storage is not None and fetcher is not None:
         dp.update.outer_middleware(
             DependenciesMiddleware(

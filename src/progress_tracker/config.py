@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,18 @@ class Settings(BaseSettings):
         description="Directory for locally stored videos",
     )
     log_level: str = Field(default="INFO", description="Python logging level name")
+
+    # ---- Who may use the bot ----
+    # NoDecode: pydantic-settings would otherwise try to JSON-decode the env
+    # value before our validator runs, and `575974511,42` is not JSON.
+    allowed_telegram_ids: Annotated[frozenset[int], NoDecode] = Field(
+        default_factory=frozenset,
+        description=(
+            "Comma-separated Telegram user ids allowed to use the bot. Empty "
+            "means 'not configured' — `middlewares.auth.resolve_allowed_ids` "
+            "then falls back to the users already in the database."
+        ),
+    )
 
     # ---- Milestone 2.5: custom Bot API endpoint + SOCKS5 ----
     bot_api_url: str = Field(
@@ -79,6 +92,18 @@ class Settings(BaseSettings):
             "<root>/<bot_token>/."
         ),
     )
+
+    @field_validator("allowed_telegram_ids", mode="before")
+    @classmethod
+    def _parse_allowed_ids(cls, v: object) -> object:
+        """Accept `575974511, 42` (and an empty string) from the environment.
+
+        A non-numeric entry raises here, at startup, rather than silently
+        dropping one person off the list.
+        """
+        if isinstance(v, str):
+            return frozenset(int(part.strip()) for part in v.split(",") if part.strip())
+        return v
 
     @field_validator("socks_proxy_url", mode="before")
     @classmethod

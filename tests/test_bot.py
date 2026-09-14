@@ -192,3 +192,24 @@ def test_build_dispatcher_attaches_fetcher_to_middleware() -> None:
     ]
     assert len(deps_mws) == 1
     assert deps_mws[0]._fetcher is fetcher
+
+
+def test_build_dispatcher_gates_updates_before_opening_a_session() -> None:
+    """AllowlistMiddleware must sit outside DependenciesMiddleware, so a
+    stranger's update never costs a DB session."""
+    from unittest.mock import MagicMock
+
+    from progress_tracker.middlewares.auth import AllowlistMiddleware
+    from progress_tracker.middlewares.db import DependenciesMiddleware
+
+    dp = build_dispatcher(
+        session_factory=MagicMock(),
+        storage=MagicMock(),
+        fetcher=RemoteFileFetcher(),
+        allowed_ids=frozenset({7}),
+    )
+    order = [type(mw).__name__ for mw in dp.update.outer_middleware]
+
+    assert order.index(AllowlistMiddleware.__name__) < order.index(
+        DependenciesMiddleware.__name__
+    )

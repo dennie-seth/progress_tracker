@@ -149,3 +149,31 @@ def test_bot_api_local_files_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.bot_api_local_files is True
     assert s.bot_api_local_root == "/srv/tg"
+
+
+# ---------- who may talk to the bot ----------
+
+
+def test_allowed_telegram_ids_default_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset means "not configured" — `resolve_allowed_ids` decides what
+    that turns into at startup."""
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.allowed_telegram_ids == frozenset()
+
+
+def test_allowed_telegram_ids_parses_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_IDS", "575974511, 42 ,")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.allowed_telegram_ids == frozenset({575974511, 42})
+
+
+def test_allowed_telegram_ids_rejects_non_numeric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo must fail at startup, not quietly lock everyone out."""
+    monkeypatch.setenv("BOT_TOKEN", "x")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_IDS", "575974511,@dennie")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]

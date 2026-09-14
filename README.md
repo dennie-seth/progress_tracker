@@ -144,6 +144,21 @@ python -m progress_tracker
 Clips that fit into the per-clip time budget are kept at normal speed; longer
 clips are sped up (`setpts` + `atempo`) to fit.
 
+## Who can use the bot
+
+The bot is not public: it stores videos on your disk and answers with them,
+so every update is checked twice before a handler runs — the sender must be
+on the allowlist, and the chat must be a 1:1 private chat (never a group).
+
+Set `ALLOWED_TELEGRAM_IDS` in `.env` to a comma-separated list of Telegram
+user ids; @userinfobot tells you yours. Changing it takes a restart.
+
+If it is left blank, the bot allows exactly the users already in its
+database and says so at startup — an existing deployment closes itself to
+strangers without an `.env` edit. On a fresh install there are no users to
+infer from, so the bot stays open to everyone and warns loudly on every
+start until you set the variable.
+
 ## Project layout
 
 See [planning notes](#) and the top-level directory — the code lives in

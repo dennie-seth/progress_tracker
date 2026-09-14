@@ -13,6 +13,7 @@ from progress_tracker.config import load_settings
 from progress_tracker.db.models import User
 from progress_tracker.db.session import create_engine, create_session_factory
 from progress_tracker.logging_setup import configure_logging
+from progress_tracker.middlewares.auth import resolve_allowed_ids
 from progress_tracker.services.persistence import (
     dump_user_manifest,
     recover_from_storage,
@@ -53,10 +54,16 @@ async def _run() -> None:
 
     bot = build_bot(settings)
     fetcher = build_fetcher(settings)
+    # After recovery on purpose: a DB wipe restores `users` from disk first,
+    # so the fallback allowlist survives a host migration along with it.
+    allowed_ids = await resolve_allowed_ids(
+        settings.allowed_telegram_ids, session_factory
+    )
     dp = build_dispatcher(
         session_factory=session_factory,
         storage=storage,
         fetcher=fetcher,
+        allowed_ids=allowed_ids,
     )
 
     # Install our own SIGINT/SIGTERM handlers so `docker compose stop` and

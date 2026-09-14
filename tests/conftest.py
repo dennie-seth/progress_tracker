@@ -25,6 +25,7 @@ from progress_tracker.db.session import create_engine, create_session_factory
 
 _PROJECT_ENV_VARS = (
     "BOT_TOKEN",
+    "ALLOWED_TELEGRAM_IDS",
     "DATABASE_URL",
     "MEDIA_DIR",
     "LOG_LEVEL",
