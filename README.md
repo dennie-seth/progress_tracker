@@ -23,6 +23,9 @@ MIT — see [LICENSE](LICENSE).
 
 ## Deploy on a VDS (production, default)
 
+**Continuous deployment:** merging to `main` deploys. When the `tests` workflow passes on the push (failing tests = no deploy), `.github/workflows/deploy.yml` POSTs to the GitLab pipeline trigger stored in the repository secret `GITLAB_DEPLOY_TRIGGER`, and GitLab CI deploys `main`. Redeploy manually from Actions → deploy → Run workflow. The trigger URL contains a token: keep it only in that secret, never in the repo. The steps below are the one-time VDS setup.
+
+
 The root `docker-compose.yml` is the **production** stack: bot-app +
 self-hosted `telegram-bot-api` + Postgres on a single host, sharing the
 bot-api data directory so the bot reads uploaded videos directly off disk.

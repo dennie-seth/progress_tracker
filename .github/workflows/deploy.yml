@@ -1,0 +1,43 @@
+name: deploy
+
+# Merge to main == deploy — but only after the `tests` workflow has passed on
+# that push. The actual build/deploy runs in GitLab CI; this just fires its
+# pipeline trigger. The trigger URL (with its token) lives in the repository
+# secret GITLAB_DEPLOY_TRIGGER — never put it in this file.
+"on":
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}  # manual redeploy from the Actions tab
+
+# One deploy at a time; a newer one waits instead of cancelling a running one.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  trigger-gitlab:
+    name: Trigger GitLab deploy pipeline
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST to the GitLab pipeline trigger
+        env:
+          TRIGGER_URL: ${{ secrets.GITLAB_DEPLOY_TRIGGER }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          if [ -z "$TRIGGER_URL" ]; then
+            echo "::error::Repository secret GITLAB_DEPLOY_TRIGGER is not set"
+            exit 1
+          fi
+          echo "Deploying ${SHA::7} via GitLab"
+          response=$(curl --silent --show-error --fail-with-body --retry 2 --max-time 30 \
+            --request POST "$TRIGGER_URL")
+          echo "$response" | jq -r '"GitLab pipeline #\(.id) (\(.status)) on \(.ref): \(.web_url)"'
