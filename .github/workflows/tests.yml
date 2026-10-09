@@ -1,0 +1,61 @@
+name: tests
+
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Cancel in-progress runs on the same ref when a new commit lands.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Same Postgres as production (docker-compose.yml). With DATABASE_URL set,
+    # the integration tests run instead of skipping. Throwaway CI-only creds.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: progress_tracker
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/progress_tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"  # matches the Dockerfile
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      # Video probing / compile tests shell out to ffmpeg + ffprobe.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install project + dev deps
+        run: pip install -e ".[dev]"
+
+      # The tests expect the schema to exist, as docker compose does at startup.
+      - name: Create schema (alembic upgrade head)
+        run: alembic upgrade head
+
+      - name: Run tests
+        run: pytest

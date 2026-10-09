@@ -1,13 +1,12 @@
 name: deploy
 
-# Merge to main == deploy — but only after the `gitleaks` scan has passed on
-# that push (no CI test workflow exists yet; add it to `workflows:` below when
-# it does). The actual build/deploy runs in GitLab CI; this just fires its
+# Merge to main == deploy — but only after the `tests` workflow has passed on
+# that push. The actual build/deploy runs in GitLab CI; this just fires its
 # pipeline trigger. The trigger URL (with its token) lives in the repository
 # secret GITLAB_DEPLOY_TRIGGER — never put it in this file.
 "on":
   workflow_run:
-    workflows: [gitleaks]
+    workflows: [tests]
     types: [completed]
     branches: [main]
   workflow_dispatch: {}  # manual redeploy from the Actions tab
